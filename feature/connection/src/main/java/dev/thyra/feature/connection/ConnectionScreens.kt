@@ -153,7 +153,10 @@ fun AuthenticationScreen(
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  var useToken by rememberSaveable { mutableStateOf(profile.authMode.name == "AccessToken") }
+  // Password credentials are the preferred entry point, even when this server
+  // was previously accessed with an access token. A user can still opt in to
+  // token login for the current screen.
+  var useToken by remember { mutableStateOf(false) }
   var identity by rememberSaveable { mutableStateOf("") }
   var password by remember { mutableStateOf("") }
   var token by remember { mutableStateOf("") }

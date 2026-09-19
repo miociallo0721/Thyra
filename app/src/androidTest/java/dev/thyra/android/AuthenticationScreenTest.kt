@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTextInput
 import dev.thyra.core.designsystem.ThyraTheme
+import dev.thyra.core.model.AuthMode
 import dev.thyra.core.model.ServerProfile
 import dev.thyra.feature.connection.AuthenticationScreen
 import org.junit.Rule
@@ -21,7 +22,14 @@ class AuthenticationScreenTest {
     composeRule.setContent {
       ThyraTheme {
         AuthenticationScreen(
-          profile = ServerProfile("server", "Memoh", "https://memoh.example.com"),
+          // A server that was last accessed with a token must still default to
+          // the preferred password login flow when authentication is shown.
+          profile = ServerProfile(
+            id = "server",
+            displayName = "Memoh",
+            baseUrl = "https://memoh.example.com",
+            authMode = AuthMode.AccessToken,
+          ),
           busy = false,
           errorMessage = null,
           onPasswordLogin = { _, _ -> },
