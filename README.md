@@ -11,7 +11,7 @@ Thyra 是通往 Memoh Agent 与工作区的原生 Android 入口。应用使用 
 首个可用的纵向功能切片已经完成：
 
 - 添加并验证多个自定义 Memoh 服务器；
-- 使用用户名和密码或现有访问令牌进行身份验证；
+- 优先使用邮箱和密码登录，同时兼容用户名和密码或现有访问令牌；
 - 使用 Android Keystore AES-GCM 密钥加密凭据；
 - 应用重启后恢复选中的服务器、Agent 与会话；
 - 将 Memoh Bot 作为顶层 Agent 展示，并列出或创建对应会话；
@@ -45,7 +45,7 @@ Debug APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。
 
 1. 启动 Thyra，输入可公开访问的 Memoh API 地址。
 2. 可以填写 `https://host:8080` 这样的后端直连地址。若使用反向代理部署 Web 服务，请填写 `https://host/api`；当输入的根地址不是 Memoh API 时，Thyra 也会自动探测 `/api` 后缀。
-3. 使用 Memoh 用户名和密码登录，或粘贴访问令牌。
+3. 优先使用 Memoh 邮箱和密码登录；也可以使用用户名和密码，或粘贴访问令牌。
 4. 选择一个 Bot，然后打开或创建会话。
 
 生产构建通过 Android 网络安全策略拒绝明文 HTTP。Debug 构建仅为明确的本地开发场景允许 HTTP，任何构建都不会禁用 TLS 证书验证。
@@ -81,7 +81,7 @@ Thyra is a native Android doorway to Memoh agents and their workspaces. It is bu
 The first vertical slice is implemented:
 
 - add and validate multiple custom Memoh servers;
-- authenticate with username/password or an existing access token;
+- sign in primarily with email/password while retaining username/password and access-token compatibility;
 - encrypt credentials with an Android Keystore AES-GCM key;
 - restore the selected server, agent, and session after restart;
 - list Memoh Bots as the top-level agents and list or create their sessions;
@@ -115,7 +115,7 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 1. Start Thyra and enter the public Memoh API address.
 2. A direct backend address such as `https://host:8080` works. For a reverse-proxied Web deployment, use `https://host/api`; Thyra also probes that suffix automatically when the entered root is not a Memoh API.
-3. Sign in with the Memoh username/password endpoint or paste an access token.
+3. Prefer a Memoh email and password; a username and password or an existing access token also works.
 4. Select a Bot, then open or create a session.
 
 Production builds reject cleartext HTTP through the Android network security policy. Debug builds permit HTTP for explicit local development only. TLS certificate verification is never disabled.

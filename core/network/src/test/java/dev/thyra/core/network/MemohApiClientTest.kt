@@ -44,6 +44,18 @@ class MemohApiClientTest {
   }
 
   @Test
+  fun emailLogin_usesMemohLegacyUsernameField() = runTest {
+    server.enqueue(jsonResponse("""{"access_token":"jwt-value","expires_at":"2026-09-19T12:00:00Z"}"""))
+    val baseUrl = server.url("/").toString().trimEnd('/')
+
+    client.login(baseUrl, "alice@example.com", "secret")
+
+    val request = server.takeRequest()
+    assertEquals("/auth/login", request.path)
+    assertTrue(request.body.readUtf8().contains("\"username\":\"alice@example.com\""))
+  }
+
+  @Test
   fun agentsAndHistory_ignoreNewOptionalFields() = runTest {
     server.enqueue(jsonResponse("""{"items":[{"id":"b1","name":"shio","display_name":"Shio","status":"ready","is_active":true,"future_field":7}]}"""))
     server.enqueue(jsonResponse("""{"items":[{"turn_id":"t1","turn_position":1,"role":"assistant","timestamp":"2026-09-19T00:00:00Z","messages":[{"id":1,"type":"text","content":"hello"},{"id":2,"type":"tool","name":"search","running":false,"input":{"q":"repo"},"output":{"count":2}}]}]}"""))

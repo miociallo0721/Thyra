@@ -10,11 +10,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ClosedSendChannelException
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -28,7 +31,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 interface ChatConnection : AutoCloseable {
-  val events: SharedFlow<JsonObject>
+  val events: Flow<JsonObject>
   val status: StateFlow<SocketStatus>
   fun updateCursor(value: RuntimeCursor?)
   fun requestSnapshot()
@@ -40,7 +43,7 @@ class MemohChatSocket internal constructor(
   private val http: OkHttpClient,
   private val json: Json,
   private val baseUrl: String,
-  private val token: String,
+  private val tokenProvider: () -> String?,
   private val botId: String,
   private val sessionId: String,
 ) : ChatConnection {
@@ -53,8 +56,12 @@ class MemohChatSocket internal constructor(
   private var reconnectDelayMillis = 1_000L
   private var cursor: RuntimeCursor? = null
 
-  private val _events = MutableSharedFlow<JsonObject>(extraBufferCapacity = 128)
-  override val events: SharedFlow<JsonObject> = _events
+  // WebSocket callbacks are ordered. Keep that order with a bounded channel and
+  // apply backpressure to the callback thread instead of dropping a frame. This
+  // avoids an unbounded coroutine backlog while making a slow UI consumer slow
+  // its own socket rather than silently losing a terminal runtime delta.
+  private val eventQueue = OrderedSocketEvents()
+  override val events: Flow<JsonObject> = eventQueue.events
 
   private val _status = MutableStateFlow(SocketStatus.Connecting)
   override val status: StateFlow<SocketStatus> = _status
@@ -99,12 +106,17 @@ class MemohChatSocket internal constructor(
 
   private fun connect() {
     if (closed.get()) return
+    val token = tokenProvider()?.trim().orEmpty()
+    if (token.isEmpty()) {
+      _status.value = SocketStatus.Expired
+      return
+    }
     _status.value = if (socket == null) SocketStatus.Connecting else SocketStatus.Reconnecting
     val request = Request.Builder()
       .url(baseUrl.trimEnd('/') + "/bots/$botId/web/ws")
       .header("Authorization", "Bearer $token")
       .build()
-    socket = http.newWebSocket(request, Listener())
+    socket = http.newWebSocket(request, Listener(token))
   }
 
   private fun sendSubscription() {
@@ -122,7 +134,11 @@ class MemohChatSocket internal constructor(
     synchronized(lock) { socket?.send(payload) }
   }
 
-  private fun scheduleReconnect() {
+  private fun scheduleReconnect(webSocket: WebSocket) {
+    synchronized(lock) {
+      if (socket !== webSocket) return
+      socket = null
+    }
     if (closed.get() || _status.value == SocketStatus.Expired) return
     _status.value = SocketStatus.Reconnecting
     reconnectJob?.cancel()
@@ -133,9 +149,9 @@ class MemohChatSocket internal constructor(
     }
   }
 
-  private inner class Listener : WebSocketListener() {
+  private inner class Listener(private val handshakeToken: String) : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
-      socket = webSocket
+      if (!isActive(webSocket)) return
       reconnectDelayMillis = 1_000L
       _status.value = SocketStatus.Connected
       synchronized(lock) { reliable.values.forEach(webSocket::send) }
@@ -143,9 +159,15 @@ class MemohChatSocket internal constructor(
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
+      if (!isActive(webSocket)) return
       val event = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: return
       acknowledge(event)
-      _events.tryEmit(event)
+      try {
+        eventQueue.send(event)
+      } catch (_: ClosedSendChannelException) {
+        // close() ended the consumer; no event is silently discarded while a
+        // connection remains active.
+      }
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -153,16 +175,24 @@ class MemohChatSocket internal constructor(
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-      if (socket === webSocket) socket = null
-      scheduleReconnect()
+      scheduleReconnect(webSocket)
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-      if (socket === webSocket) socket = null
+      if (!isActive(webSocket)) return
       if (response?.code == 401) {
-        _status.value = SocketStatus.Expired
+        // A REST refresh can finish between this handshake and its response.
+        // Retry with that newer credential before declaring the session expired.
+        if (tokenProvider()?.trim() != handshakeToken) {
+          scheduleReconnect(webSocket)
+        } else {
+          synchronized(lock) {
+            if (socket === webSocket) socket = null
+          }
+          _status.value = SocketStatus.Expired
+        }
       } else {
-        scheduleReconnect()
+        scheduleReconnect(webSocket)
       }
     }
   }
@@ -178,6 +208,8 @@ class MemohChatSocket internal constructor(
     if (key != null) synchronized(lock) { reliable.remove(key) }
   }
 
+  private fun isActive(webSocket: WebSocket): Boolean = synchronized(lock) { socket === webSocket && !closed.get() }
+
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     reconnectJob?.cancel()
@@ -186,6 +218,17 @@ class MemohChatSocket internal constructor(
       socket?.close(1000, "screen closed")
       socket = null
     }
+    eventQueue.close()
     _status.value = SocketStatus.Disconnected
   }
+}
+
+/** A bounded, ordered handoff from OkHttp callbacks to the sole UI collector. */
+internal class OrderedSocketEvents(capacity: Int = 64) {
+  private val channel = Channel<JsonObject>(capacity)
+  val events: Flow<JsonObject> = channel.receiveAsFlow()
+
+  fun send(event: JsonObject) = runBlocking { channel.send(event) }
+
+  fun close() = channel.close()
 }

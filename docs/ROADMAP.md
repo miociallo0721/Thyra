@@ -5,7 +5,7 @@
 - Native Kotlin/Compose application with edge-to-edge Material 3 foundations and a Thyra design layer.
 - API 26 minimum and target/compile SDK 36.
 - Multiple custom server profiles with `/ping` validation and `/api` discovery.
-- Username/password login, access-token login, proactive JWT refresh, expired-session handling, and logout/switch boundaries.
+- Email-or-username/password login with email presented first, access-token login, proactive JWT refresh, expired-session handling, and logout/switch boundaries.
 - Keystore-backed AES-GCM credential storage; non-secret state in DataStore.
 - Bot list, session list, new session, session history, and restart restoration.
 - Canonical Memoh WebSocket chat with subscription snapshots/deltas, stable reliable IDs, reconnect backoff, gap recovery, send, and abort.

@@ -27,7 +27,7 @@ class AuthenticationExpiredException(message: String = "登录已过期，请重
 interface ThyraRepository {
   val persistedState: Flow<PersistedState>
   suspend fun addServer(displayName: String, address: String): ServerValidation
-  suspend fun authenticateWithPassword(profile: ServerProfile, username: String, password: String): Account
+  suspend fun authenticateWithPassword(profile: ServerProfile, identity: String, password: String): Account
   suspend fun authenticateWithToken(profile: ServerProfile, token: String): Account
   suspend fun restoreSelected(): RestoredConnection?
   suspend fun loadAgents(profile: ServerProfile): List<Agent>
@@ -74,8 +74,8 @@ class DefaultThyraRepository(
     return ServerValidation(profile, capabilities)
   }
 
-  override suspend fun authenticateWithPassword(profile: ServerProfile, username: String, password: String): Account {
-    val auth = service.login(profile.baseUrl, username, password)
+  override suspend fun authenticateWithPassword(profile: ServerProfile, identity: String, password: String): Account {
+    val auth = service.login(profile.baseUrl, identity, password)
     credentials.put(profile.id, StoredCredential(auth.accessToken, auth.expiresAt))
     updateAuthMode(profile.id, AuthMode.Credentials)
     return service.me(profile.baseUrl, auth.accessToken)
@@ -113,8 +113,11 @@ class DefaultThyraRepository(
   ): List<ChatTurn> = authorized(profile) { token -> service.messages(profile.baseUrl, token, agentId, sessionId) }
 
   override fun openChat(profile: ServerProfile, agentId: String, sessionId: String): ChatConnection {
-    val token = credentials.get(profile.id)?.token ?: throw AuthenticationExpiredException()
-    return service.openChatSocket(profile.baseUrl, token, agentId, sessionId)
+    if (credentials.get(profile.id) == null) throw AuthenticationExpiredException()
+    // The provider is evaluated by each WebSocket handshake, so reconnects use
+    // a JWT refreshed by a concurrent REST request without coupling network to
+    // the Android credential implementation.
+    return service.openChatSocket(profile.baseUrl, { credentials.get(profile.id)?.token }, agentId, sessionId)
   }
 
   override suspend fun selectServer(serverId: String) {
@@ -149,13 +152,7 @@ class DefaultThyraRepository(
   private suspend fun <T> authorized(profile: ServerProfile, call: suspend (String) -> T): T {
     var stored = credentials.get(profile.id) ?: throw AuthenticationExpiredException()
     if (stored.isExpiringSoon()) {
-      stored = try {
-        val refreshed = service.refresh(profile.baseUrl, stored.token)
-        StoredCredential(refreshed.accessToken, refreshed.expiresAt).also { credentials.put(profile.id, it) }
-      } catch (_: Throwable) {
-        credentials.remove(profile.id)
-        throw AuthenticationExpiredException()
-      }
+      stored = refreshCredential(profile, stored)
     }
     try {
       return call(stored.token)
@@ -163,15 +160,22 @@ class DefaultThyraRepository(
       if (!failure.isUnauthorized) throw failure
     }
 
-    val refreshed = try {
-      service.refresh(profile.baseUrl, stored.token)
-    } catch (_: Throwable) {
-      credentials.remove(profile.id)
-      throw AuthenticationExpiredException()
-    }
-    credentials.put(profile.id, StoredCredential(refreshed.accessToken, refreshed.expiresAt))
+    val refreshed = refreshCredential(profile, stored)
     return try {
-      call(refreshed.accessToken)
+      call(refreshed.token)
+    } catch (failure: ApiException) {
+      if (failure.isUnauthorized) {
+        credentials.remove(profile.id)
+        throw AuthenticationExpiredException()
+      }
+      throw failure
+    }
+  }
+
+  private suspend fun refreshCredential(profile: ServerProfile, stored: StoredCredential): StoredCredential {
+    return try {
+      val refreshed = service.refresh(profile.baseUrl, stored.token)
+      StoredCredential(refreshed.accessToken, refreshed.expiresAt).also { credentials.put(profile.id, it) }
     } catch (failure: ApiException) {
       if (failure.isUnauthorized) {
         credentials.remove(profile.id)

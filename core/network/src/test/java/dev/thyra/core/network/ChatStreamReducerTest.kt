@@ -45,5 +45,54 @@ class ChatStreamReducerTest {
     assertEquals("visible", (result.activeTurn!!.blocks.single() as ChatBlock.Text).content)
   }
 
+  @Test
+  fun resetThenUpsert_keepsReplacementMessage() {
+    val initial = snapshotWithText("old")
+
+    val result = ChatStreamReducer.reduce(
+      initial,
+      event("""{"type":"runtime_delta","epoch":"e1","seq":5,"delta":{"reset_messages":true,"message_upserts":[{"id":2,"type":"text","content":"new"}]}}"""),
+    )
+
+    assertEquals("new", (result.activeTurn!!.blocks.single() as ChatBlock.Text).content)
+    assertFalse(result.needsSnapshot)
+  }
+
+  @Test
+  fun resetThenAppend_keepsReplacementMessage() {
+    val initial = snapshotWithText("old")
+
+    val result = ChatStreamReducer.reduce(
+      initial,
+      event("""{"type":"runtime_delta","epoch":"e1","seq":5,"delta":{"reset_messages":true,"message_appends":[{"id":3,"type":"text","content":"new"}]}}"""),
+    )
+
+    assertEquals("new", (result.activeTurn!!.blocks.single() as ChatBlock.Text).content)
+    assertEquals(5, result.cursor!!.sequence)
+  }
+
+  @Test
+  fun toolUpsert_usesToolCallIdWhenServerReplacesProvisionalMessageId() {
+    val initial = ChatStreamReducer.reduce(
+      LiveChatState(),
+      event("""{"type":"runtime_snapshot","epoch":"e1","seq":4,"snapshot":{"current_run_view":{"run_id":"r1","turn_id":"t1","status":"running","messages":[{"id":1,"type":"tool","name":"search","tool_call_id":"call-1","running":true}]}}}"""),
+    )
+
+    val result = ChatStreamReducer.reduce(
+      initial,
+      event("""{"type":"runtime_delta","epoch":"e1","seq":5,"delta":{"message_upserts":[{"id":9,"type":"tool","name":"search","tool_call_id":"call-1","running":false,"output":"done"}]}}"""),
+    )
+
+    val tool = result.activeTurn!!.blocks.single() as ChatBlock.Tool
+    assertEquals(1, tool.id)
+    assertEquals("call-1", tool.toolCallId)
+    assertEquals("\"done\"", tool.output)
+  }
+
+  private fun snapshotWithText(content: String) = ChatStreamReducer.reduce(
+    LiveChatState(),
+    event("""{"type":"runtime_snapshot","epoch":"e1","seq":4,"snapshot":{"current_run_view":{"run_id":"r1","turn_id":"t1","status":"running","messages":[{"id":1,"type":"text","content":"$content"}]}}}"""),
+  )
+
   private fun event(value: String) = json.parseToJsonElement(value).jsonObject
 }

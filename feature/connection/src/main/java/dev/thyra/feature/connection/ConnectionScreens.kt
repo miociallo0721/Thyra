@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -147,15 +148,15 @@ fun AuthenticationScreen(
   profile: ServerProfile,
   busy: Boolean,
   errorMessage: String?,
-  onPasswordLogin: (username: String, password: String) -> Unit,
+  onPasswordLogin: (identity: String, password: String) -> Unit,
   onTokenLogin: (token: String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   var useToken by rememberSaveable { mutableStateOf(profile.authMode.name == "AccessToken") }
-  var username by rememberSaveable { mutableStateOf("") }
-  var password by rememberSaveable { mutableStateOf("") }
-  var token by rememberSaveable { mutableStateOf("") }
+  var identity by rememberSaveable { mutableStateOf("") }
+  var password by remember { mutableStateOf("") }
+  var token by remember { mutableStateOf("") }
   Scaffold(
     modifier = modifier.imePadding(),
     topBar = {
@@ -188,11 +189,13 @@ fun AuthenticationScreen(
         )
       } else {
         OutlinedTextField(
-          value = username,
-          onValueChange = { username = it },
+          value = identity,
+          onValueChange = { identity = it },
           modifier = Modifier.fillMaxWidth(),
-          label = { Text("用户名") },
+          label = { Text("邮箱或用户名") },
+          supportingText = { Text("推荐使用邮箱登录") },
           singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
         )
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
@@ -211,15 +214,15 @@ fun AuthenticationScreen(
       }
       Spacer(Modifier.height(20.dp))
       Button(
-        onClick = { if (useToken) onTokenLogin(token) else onPasswordLogin(username, password) },
+        onClick = { if (useToken) onTokenLogin(token) else onPasswordLogin(identity, password) },
         modifier = Modifier.fillMaxWidth(),
-        enabled = !busy && if (useToken) token.isNotBlank() else username.isNotBlank() && password.isNotBlank(),
+        enabled = !busy && if (useToken) token.isNotBlank() else identity.isNotBlank() && password.isNotBlank(),
       ) {
         if (busy) CircularProgressIndicator(modifier = Modifier.height(18.dp), strokeWidth = 2.dp)
         else Text("登录")
       }
       TextButton(onClick = { useToken = !useToken }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-        Text(if (useToken) "改用用户名和密码" else "改用访问令牌")
+        Text(if (useToken) "改用邮箱和密码" else "改用访问令牌")
       }
     }
   }

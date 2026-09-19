@@ -63,6 +63,10 @@ object ChatStreamReducer {
     val fullView = delta.obj("current_run_view")
     var turn = if (fullView != null) turnFromView(fullView) else state.activeTurn
     if (fullView == null && turn != null) {
+      // Memoh's reducer resets the working message list before applying every
+      // patch carried by this delta. A reset can therefore also carry the first
+      // message in a replacement projection.
+      if (delta.boolean("reset_messages") == true) turn = turn.copy(blocks = emptyList())
       delta.array("message_appends")?.forEach { append ->
         val obj = append as? JsonObject ?: return@forEach
         turn = turn?.let { current -> current.copy(blocks = appendBlock(current.blocks, obj)) }
@@ -72,7 +76,8 @@ object ChatStreamReducer {
         val block = blockFromMessage(obj) ?: return@forEach
         turn = turn?.let { current -> current.copy(blocks = upsertBlock(current.blocks, block)) }
       }
-      if (delta.boolean("reset_messages") == true) turn = turn?.copy(blocks = emptyList())
+      // M1 does not render detailed tool progress yet. Ignoring these optional
+      // patches is safe: they do not change message identity or terminal state.
     }
     val run = delta.obj("run")
     val status = fullView?.string("status") ?: run?.string("status") ?: state.runStatus
@@ -113,6 +118,7 @@ object ChatStreamReducer {
       running = message.boolean("running") ?: false,
       failed = message["output"]?.toString()?.contains("error", true) == true,
       elapsedSeconds = message.double("elapsed_time_seconds"),
+      toolCallId = message.string("tool_call_id"),
     )
     "error" -> ChatBlock.Notice(message.string("content").orEmpty(), true)
     "notice", "status", "command" -> ChatBlock.Notice(message.string("content").orEmpty())
@@ -150,12 +156,26 @@ object ChatStreamReducer {
       when (it) {
         is ChatBlock.Text -> it.id == id
         is ChatBlock.Reasoning -> it.id == id
-        is ChatBlock.Tool -> it.id == id
+        is ChatBlock.Tool -> when (block) {
+          is ChatBlock.Tool -> {
+            val toolCallId = block.toolCallId?.trim().orEmpty()
+            (toolCallId.isNotEmpty() && it.toolCallId?.trim() == toolCallId) || it.id == id
+          }
+          else -> it.id == id
+        }
         else -> false
       }
     }
     if (index < 0) return blocks + block
-    return blocks.toMutableList().also { it[index] = block }
+    return blocks.toMutableList().also { copy ->
+      copy[index] = if (block is ChatBlock.Tool && copy[index] is ChatBlock.Tool) {
+        // The server can replace a provisional message id while retaining the
+        // same tool call. Preserve the local row identity as Memoh Web does.
+        block.copy(id = (copy[index] as ChatBlock.Tool).id)
+      } else {
+        block
+      }
+    }
   }
 
   private fun JsonObject.string(key: String) = this[key]?.jsonPrimitive?.contentOrNull

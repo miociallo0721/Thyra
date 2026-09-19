@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -5,6 +7,25 @@ plugins {
   alias(libs.plugins.hilt)
   alias(libs.plugins.ksp)
 }
+
+val releaseSigningPropertiesFile = rootProject.file("keystore.properties")
+val releaseSigningProperties = Properties().apply {
+  if (releaseSigningPropertiesFile.isFile) {
+    releaseSigningPropertiesFile.inputStream().use(::load)
+  }
+}
+
+fun releaseSigningValue(propertyName: String, environmentName: String): String? =
+  releaseSigningProperties.getProperty(propertyName)?.takeIf(String::isNotBlank)
+    ?: providers.environmentVariable(environmentName).orNull?.takeIf(String::isNotBlank)
+
+val releaseSigningValues = mapOf(
+  "storeFile" to releaseSigningValue("storeFile", "THYRA_RELEASE_STORE_FILE"),
+  "storePassword" to releaseSigningValue("storePassword", "THYRA_RELEASE_STORE_PASSWORD"),
+  "keyAlias" to releaseSigningValue("keyAlias", "THYRA_RELEASE_KEY_ALIAS"),
+  "keyPassword" to releaseSigningValue("keyPassword", "THYRA_RELEASE_KEY_PASSWORD"),
+)
+val hasReleaseSigningValue = releaseSigningValues.values.any { it != null }
 
 android {
     namespace = "dev.thyra.android"
@@ -17,8 +38,23 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        if (hasReleaseSigningValue) {
+            require(releaseSigningValues.values.all { it != null }) {
+                "Set all release signing values in keystore.properties or THYRA_RELEASE_* environment variables"
+            }
+            create("release") {
+                storeFile = rootProject.file(requireNotNull(releaseSigningValues["storeFile"]))
+                storePassword = requireNotNull(releaseSigningValues["storePassword"])
+                keyAlias = requireNotNull(releaseSigningValues["keyAlias"])
+                keyPassword = requireNotNull(releaseSigningValues["keyPassword"])
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

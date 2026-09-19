@@ -38,7 +38,7 @@ Non-secret state is serialized into Preferences DataStore:
 
 Access tokens are stored separately. `KeystoreCredentialStore` generates a non-exportable AES key in Android Keystore and stores only AES-GCM ciphertext, IV, and tag in a dedicated private SharedPreferences file. Android backup and device-transfer rules exclude that file.
 
-The current Memoh refresh endpoint accepts the still-valid JWT and returns another JWT; there is no refresh token. Thyra proactively refreshes within five minutes of `expires_at`. A 401 causes one refresh-and-retry attempt. Failure removes the credential and returns to authentication.
+The current Memoh refresh endpoint accepts the still-valid JWT and returns another JWT; there is no refresh token. Thyra proactively refreshes within five minutes of `expires_at`. A 401 causes one refresh-and-retry attempt. Only a confirmed unauthorized refresh or a second unauthorized response clears the credential; transient refresh failures retain it and surface their real error for retry.
 
 ## Server URL discovery
 
@@ -58,6 +58,8 @@ Reliable outbound messages are held by stable IDs until the server acknowledges 
 `ChatStreamReducer` accepts an authoritative `runtime_snapshot`, then only consecutive `runtime_delta` frames for the same epoch. It performs targeted message append/upsert operations. A gap never gets guessed through: the visible state is retained while the socket requests another snapshot.
 
 After a terminal run status, the ViewModel reloads REST history. This reconciles optimistic user turns and live assistant output with the server's settled ordering.
+
+Session opening has latest-wins ownership: a new selection, creation, restoration, or lifecycle reopen cancels the prior opening job and advances its generation. Late history requests and collectors may not attach or mutate state unless they still own that generation. Socket events use a bounded, ordered channel with callback-thread backpressure rather than a dropping shared-flow buffer.
 
 ## UI and adaptation
 

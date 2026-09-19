@@ -20,6 +20,7 @@ import dev.thyra.core.model.ThyraUiState
 import dev.thyra.core.network.ChatConnection
 import dev.thyra.core.network.ChatStreamReducer
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,6 +41,8 @@ class MainViewModel @Inject constructor(
   private var socket: ChatConnection? = null
   private var socketEventsJob: Job? = null
   private var socketStatusJob: Job? = null
+  private var openSessionJob: Job? = null
+  private var sessionOpeningGeneration = 0L
   private var demoMode = false
 
   init {
@@ -67,6 +70,7 @@ class MainViewModel @Inject constructor(
         it.copy(restoring = false, destination = AppDestination.Authentication, errorMessage = "请重新登录 ${selected.displayName}")
       }
     } catch (failure: Throwable) {
+      if (failure is CancellationException) throw failure
       _uiState.update {
         it.copy(restoring = false, destination = AppDestination.Authentication, errorMessage = failure.userMessage())
       }
@@ -105,10 +109,12 @@ class MainViewModel @Inject constructor(
         errorMessage = null,
       )
     }
-    if (rememberedSession != null) openSessionInternal(profile, rememberedAgent, rememberedSession)
+    if (rememberedSession != null) startOpenSession(profile, rememberedAgent, rememberedSession)
   }
 
   fun addServer(displayName: String, address: String) = launchAction {
+    cancelSessionOpening()
+    closeSocket()
     val validation = repository.addServer(displayName, address)
     _uiState.update {
       it.copy(
@@ -120,6 +126,8 @@ class MainViewModel @Inject constructor(
   }
 
   fun selectProfile(profile: ServerProfile) = launchAction {
+    cancelSessionOpening()
+    closeSocket()
     repository.selectServer(profile.id)
     _uiState.update { it.copy(selectedProfile = profile, destination = AppDestination.Authentication) }
     try {
@@ -128,12 +136,15 @@ class MainViewModel @Inject constructor(
       restoreWorkspace(restored.profile, restored.account, persisted)
     } catch (_: AuthenticationExpiredException) {
       // The authentication screen is already visible.
+    } catch (failure: Throwable) {
+      if (failure is CancellationException) throw failure
+      throw failure
     }
   }
 
-  fun loginWithPassword(username: String, password: String) = launchAction {
+  fun loginWithPassword(identity: String, password: String) = launchAction {
     val profile = requireNotNull(_uiState.value.selectedProfile)
-    val account = repository.authenticateWithPassword(profile, username, password)
+    val account = repository.authenticateWithPassword(profile, identity, password)
     finishLogin(profile, account)
   }
 
@@ -156,6 +167,8 @@ class MainViewModel @Inject constructor(
   }
 
   fun selectAgent(agent: Agent) = launchAction {
+    cancelSessionOpening()
+    closeSocket()
     val profile = requireNotNull(_uiState.value.selectedProfile)
     repository.selectAgent(profile.id, agent.id)
     val sessions = if (demoMode) demoSessions(agent.id) else repository.loadSessions(profile, agent.id)
@@ -172,71 +185,122 @@ class MainViewModel @Inject constructor(
     _uiState.update { it.copy(sessions = sessions) }
   }
 
-  fun createSession() = launchAction {
-    val state = _uiState.value
-    val profile = requireNotNull(state.selectedProfile)
-    val agent = requireNotNull(state.selectedAgent)
-    val session = if (demoMode) ChatSession("demo-new", agent.id, title = "新对话")
-    else repository.createSession(profile, agent.id)
-    _uiState.update { it.copy(sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id }) }
-    openSessionInternal(profile, agent, session)
-  }
-
-  fun selectSession(session: ChatSession) = launchAction {
-    val state = _uiState.value
-    openSessionInternal(requireNotNull(state.selectedProfile), requireNotNull(state.selectedAgent), session)
-  }
-
-  private suspend fun openSessionInternal(profile: ServerProfile, agent: Agent, session: ChatSession) {
+  fun createSession() {
+    val generation = cancelSessionOpening()
     closeSocket()
-    val history = if (demoMode) demoHistory(session.id) else repository.loadMessages(profile, agent.id, session.id)
-    if (!demoMode) repository.selectSession(profile.id, agent.id, session.id)
+    launchAction {
+      val state = _uiState.value
+      val profile = requireNotNull(state.selectedProfile)
+      val agent = requireNotNull(state.selectedAgent)
+      val session = if (demoMode) ChatSession("demo-new", agent.id, title = "新对话")
+      else repository.createSession(profile, agent.id)
+      if (!isCurrentSessionOpening(generation)) return@launchAction
+      _uiState.update { it.copy(sessions = listOf(session) + it.sessions.filterNot { item -> item.id == session.id }) }
+      startOpenSession(profile, agent, session, generation = generation)
+    }
+  }
+
+  fun selectSession(session: ChatSession) {
+    val state = _uiState.value
+    startOpenSession(requireNotNull(state.selectedProfile), requireNotNull(state.selectedAgent), session)
+  }
+
+  private fun startOpenSession(
+    profile: ServerProfile,
+    agent: Agent,
+    session: ChatSession,
+    preserveTranscript: Boolean = false,
+    generation: Long? = null,
+  ) {
+    val openingGeneration = generation ?: cancelSessionOpening()
+    if (!isCurrentSessionOpening(openingGeneration)) return
+    closeSocket()
     _uiState.update {
       it.copy(
         destination = AppDestination.Chat,
         selectedSession = session,
-        history = history,
+        history = if (preserveTranscript) it.history else emptyList(),
         live = LiveChatState(),
         socketStatus = if (demoMode) SocketStatus.Connected else SocketStatus.Connecting,
       )
     }
-    if (!demoMode) attachSocket(repository.openChat(profile, agent.id, session.id))
+    openSessionJob = viewModelScope.launch {
+      try {
+        val history = if (demoMode) demoHistory(session.id) else repository.loadMessages(profile, agent.id, session.id)
+        if (!isCurrentSessionOpening(openingGeneration)) return@launch
+        if (!demoMode) repository.selectSession(profile.id, agent.id, session.id)
+        if (!isCurrentSessionOpening(openingGeneration)) return@launch
+        _uiState.update { it.copy(history = history, live = LiveChatState()) }
+        if (!demoMode) {
+          val connection = repository.openChat(profile, agent.id, session.id)
+          if (isCurrentSessionOpening(openingGeneration)) attachSocket(connection, openingGeneration) else connection.close()
+        }
+      } catch (failure: AuthenticationExpiredException) {
+        if (!isCurrentSessionOpening(openingGeneration)) return@launch
+        _uiState.update { it.copy(destination = AppDestination.Authentication, errorMessage = failure.userMessage()) }
+      } catch (failure: Throwable) {
+        if (failure is CancellationException) throw failure
+        if (!isCurrentSessionOpening(openingGeneration)) return@launch
+        _uiState.update { it.copy(socketStatus = SocketStatus.Disconnected, errorMessage = failure.userMessage()) }
+      }
+    }
   }
 
-  private fun attachSocket(connection: ChatConnection) {
+  private fun attachSocket(connection: ChatConnection, generation: Long) {
+    if (!isCurrentSessionOpening(generation)) {
+      connection.close()
+      return
+    }
+    closeSocket()
+    if (!isCurrentSessionOpening(generation)) {
+      connection.close()
+      return
+    }
     socket = connection
     socketEventsJob = viewModelScope.launch {
       connection.events.collect { event ->
+        if (socket !== connection || !isCurrentSessionOpening(generation)) return@collect
         val previous = _uiState.value.live
         val next = ChatStreamReducer.reduce(previous, event)
         _uiState.update { it.copy(live = next, errorMessage = next.errorMessage ?: it.errorMessage) }
         connection.updateCursor(next.cursor)
-        if (next.needsSnapshot) connection.requestSnapshot()
+        if (!previous.needsSnapshot && next.needsSnapshot) connection.requestSnapshot()
         val justFinished = previous.isGenerating && !next.isGenerating && next.runStatus in TERMINAL_STATES
         if (justFinished) {
           delay(200)
-          refreshHistoryAfterRun()
+          refreshHistoryAfterRun(connection, generation)
         }
       }
     }
     socketStatusJob = viewModelScope.launch {
       connection.status.collect { status ->
+        if (socket !== connection || !isCurrentSessionOpening(generation)) return@collect
         _uiState.update { it.copy(socketStatus = status) }
         if (status == SocketStatus.Expired) {
+          _uiState.value.selectedProfile?.let { repository.logout(it.id) }
+          if (socket !== connection || !isCurrentSessionOpening(generation)) return@collect
           _uiState.update { it.copy(destination = AppDestination.Authentication, errorMessage = "登录已过期，请重新登录") }
         }
       }
     }
   }
 
-  private suspend fun refreshHistoryAfterRun() {
+  private suspend fun refreshHistoryAfterRun(connection: ChatConnection, generation: Long) {
     val state = _uiState.value
     val profile = state.selectedProfile ?: return
     val agent = state.selectedAgent ?: return
     val session = state.selectedSession ?: return
-    runCatching { repository.loadMessages(profile, agent.id, session.id) }
-      .onSuccess { turns -> _uiState.update { it.copy(history = turns, live = LiveChatState()) } }
-      .onFailure { failure -> _uiState.update { it.copy(errorMessage = failure.userMessage()) } }
+    try {
+      val turns = repository.loadMessages(profile, agent.id, session.id)
+      if (socket === connection && isCurrentSessionOpening(generation)) {
+        _uiState.update { it.copy(history = turns, live = LiveChatState()) }
+      }
+    } catch (failure: Throwable) {
+      if (failure is CancellationException) throw failure
+      if (socket === connection && isCurrentSessionOpening(generation)) {
+        _uiState.update { it.copy(errorMessage = failure.userMessage()) }
+      }
+    }
   }
 
   fun sendMessage(text: String) {
@@ -270,6 +334,8 @@ class MainViewModel @Inject constructor(
   }
 
   fun exploreDemo() {
+    cancelSessionOpening()
+    closeSocket()
     demoMode = true
     val profile = ServerProfile("demo", "Thyra 演示", "https://demo.invalid")
     _uiState.value = ThyraUiState(
@@ -315,11 +381,14 @@ class MainViewModel @Inject constructor(
   fun back() {
     when (_uiState.value.destination) {
       AppDestination.Chat -> {
+        cancelSessionOpening()
         closeSocket()
         _uiState.update { it.copy(destination = AppDestination.Sessions, selectedSession = null, history = emptyList(), live = LiveChatState()) }
       }
       AppDestination.Sessions -> _uiState.update { it.copy(destination = AppDestination.Agents, selectedAgent = null, sessions = emptyList()) }
       AppDestination.Agents, AppDestination.Authentication -> {
+        cancelSessionOpening()
+        closeSocket()
         demoMode = false
         _uiState.update { it.copy(destination = AppDestination.Connection, errorMessage = null) }
       }
@@ -328,6 +397,7 @@ class MainViewModel @Inject constructor(
   }
 
   fun switchServer() {
+    cancelSessionOpening()
     closeSocket()
     demoMode = false
     _uiState.update { it.copy(destination = AppDestination.Connection, selectedAgent = null, selectedSession = null, errorMessage = null) }
@@ -339,6 +409,7 @@ class MainViewModel @Inject constructor(
       return
     }
     launchAction {
+      cancelSessionOpening()
       val profile = requireNotNull(_uiState.value.selectedProfile)
       closeSocket()
       repository.logout(profile.id)
@@ -359,7 +430,8 @@ class MainViewModel @Inject constructor(
   }
 
   fun onAppBackgrounded() {
-    if (demoMode || socket == null) return
+    if (demoMode || (socket == null && openSessionJob == null)) return
+    cancelSessionOpening()
     closeSocket()
     _uiState.update { it.copy(socketStatus = SocketStatus.Disconnected) }
   }
@@ -370,18 +442,7 @@ class MainViewModel @Inject constructor(
     val profile = state.selectedProfile ?: return
     val agent = state.selectedAgent ?: return
     val session = state.selectedSession ?: return
-    viewModelScope.launch {
-      try {
-        _uiState.update { it.copy(socketStatus = SocketStatus.Connecting) }
-        val history = repository.loadMessages(profile, agent.id, session.id)
-        _uiState.update { it.copy(history = history, live = LiveChatState()) }
-        attachSocket(repository.openChat(profile, agent.id, session.id))
-      } catch (failure: AuthenticationExpiredException) {
-        _uiState.update { it.copy(destination = AppDestination.Authentication, errorMessage = failure.userMessage()) }
-      } catch (failure: Throwable) {
-        _uiState.update { it.copy(socketStatus = SocketStatus.Disconnected, errorMessage = failure.userMessage()) }
-      }
-    }
+    startOpenSession(profile, agent, session, preserveTranscript = true)
   }
 
   private fun launchAction(block: suspend () -> Unit) = viewModelScope.launch {
@@ -391,6 +452,7 @@ class MainViewModel @Inject constructor(
     } catch (failure: AuthenticationExpiredException) {
       _uiState.update { it.copy(destination = AppDestination.Authentication, errorMessage = failure.userMessage()) }
     } catch (failure: Throwable) {
+      if (failure is CancellationException) throw failure
       _uiState.update { it.copy(errorMessage = failure.userMessage()) }
     } finally {
       _uiState.update { it.copy(busy = false, restoring = false) }
@@ -398,13 +460,26 @@ class MainViewModel @Inject constructor(
   }
 
   private fun closeSocket() {
+    val connection = socket
+    socket = null
     socketEventsJob?.cancel()
     socketStatusJob?.cancel()
-    socket?.close()
-    socket = null
+    socketEventsJob = null
+    socketStatusJob = null
+    connection?.close()
   }
 
+  private fun cancelSessionOpening(): Long {
+    sessionOpeningGeneration += 1
+    openSessionJob?.cancel()
+    openSessionJob = null
+    return sessionOpeningGeneration
+  }
+
+  private fun isCurrentSessionOpening(generation: Long): Boolean = generation == sessionOpeningGeneration
+
   override fun onCleared() {
+    cancelSessionOpening()
     closeSocket()
     super.onCleared()
   }

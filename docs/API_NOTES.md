@@ -17,7 +17,7 @@ Thyra validates with `/ping`, not with an arbitrary successful page.
 
 ## Authentication
 
-- `POST /auth/login` body: `{ "username": "...", "password": "..." }`.
+- `POST /auth/login` body: `{ "username": "...", "password": "..." }`. Despite the legacy JSON key, the account service treats the value as an identity and resolves either an exact username or an exact email. Thyra therefore presents email first while retaining username compatibility.
 - The response contains `access_token`, `token_type`, and `expires_at`; no refresh token exists.
 - `POST /auth/refresh` requires the still-valid bearer JWT and returns another access token.
 - `GET /users/me` verifies a supplied/restored token.
@@ -79,6 +79,20 @@ Important server events:
 
 The server does not replay missing deltas from a cursor. The cursor identifies client position; a gap must be recovered with a snapshot.
 
+For a delta without `current_run_view`, Memoh Web begins its patch with an empty
+message list when `reset_messages=true`, then applies `message_appends`,
+`progress_appends`, and `message_upserts` from that same delta. A replacement
+message in that frame must therefore remain visible. Tool upserts identify an
+existing tool first by message `id`, and also by non-empty `tool_call_id`; the
+client preserves its existing row identity when the latter matches. M1 does not
+show detailed `progress_appends`, but safely ignores them because they do not
+alter message identity or run state.
+
+Thyra authenticates every WebSocket handshake with the `Authorization` header.
+Its socket receives a token provider rather than a captured JWT, so reconnects
+read a credential that may have been refreshed by REST. The network module does
+not know how the credential is stored.
+
 Abort is WebSocket-only:
 
 ```json
@@ -101,7 +115,7 @@ Relevant conditions include unauthorized/forbidden, busy or conflicting session 
 ## Source pointers
 
 - health: `internal/handlers/ping.go`
-- login/refresh: `internal/handlers/auth.go`, `internal/auth/jwt.go`
+- login/refresh: `internal/handlers/auth.go`, `internal/accounts/service.go`, `db/postgres/queries/users.sql`, `internal/auth/jwt.go`
 - sessions: `internal/handlers/session.go`
 - history: `internal/handlers/message.go`
 - WebSocket envelope/control: `internal/handlers/local_channel.go`

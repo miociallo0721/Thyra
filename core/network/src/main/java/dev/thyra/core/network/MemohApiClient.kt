@@ -23,14 +23,14 @@ data class AuthCredential(val accessToken: String, val expiresAt: String? = null
 interface MemohService {
   suspend fun discover(input: String): Pair<String, ServerCapabilities>
   suspend fun ping(baseUrl: String): ServerCapabilities
-  suspend fun login(baseUrl: String, username: String, password: String): AuthCredential
+  suspend fun login(baseUrl: String, identity: String, password: String): AuthCredential
   suspend fun refresh(baseUrl: String, token: String): AuthCredential
   suspend fun me(baseUrl: String, token: String): Account
   suspend fun agents(baseUrl: String, token: String): List<Agent>
   suspend fun sessions(baseUrl: String, token: String, botId: String): List<ChatSession>
   suspend fun createSession(baseUrl: String, token: String, botId: String, title: String = ""): ChatSession
   suspend fun messages(baseUrl: String, token: String, botId: String, sessionId: String): List<ChatTurn>
-  fun openChatSocket(baseUrl: String, token: String, botId: String, sessionId: String): ChatConnection
+  fun openChatSocket(baseUrl: String, tokenProvider: () -> String?, botId: String, sessionId: String): ChatConnection
 }
 
 class ApiException(
@@ -51,6 +51,7 @@ class MemohApiClient(
       try {
         return candidate to ping(candidate)
       } catch (failure: Throwable) {
+        if (failure is kotlinx.coroutines.CancellationException) throw failure
         lastFailure = failure
       }
     }
@@ -67,8 +68,9 @@ class MemohApiClient(
     }
   }
 
-  override suspend fun login(baseUrl: String, username: String, password: String): AuthCredential {
-    val body = json.encodeToString(LoginRequestDto(username.trim(), password))
+  override suspend fun login(baseUrl: String, identity: String, password: String): AuthCredential {
+    // Memoh keeps the JSON key as `username`, but resolves the value as either username or email.
+    val body = json.encodeToString(LoginRequestDto(identity.trim(), password))
     val response = execute(
       Request.Builder()
         .url(endpoint(baseUrl, "/auth/login"))
@@ -151,10 +153,10 @@ class MemohApiClient(
 
   override fun openChatSocket(
     baseUrl: String,
-    token: String,
+    tokenProvider: () -> String?,
     botId: String,
     sessionId: String,
-  ): ChatConnection = MemohChatSocket(http, json, baseUrl, token, botId, sessionId)
+  ): ChatConnection = MemohChatSocket(http, json, baseUrl, tokenProvider, botId, sessionId)
 
   private suspend fun execute(request: Request): Response = withContext(Dispatchers.IO) { http.newCall(request).execute() }
 
@@ -202,6 +204,7 @@ class MemohApiClient(
       running = message.running,
       failed = message.output?.toString()?.contains("error", ignoreCase = true) == true,
       elapsedSeconds = message.elapsedTimeSeconds,
+      toolCallId = message.toolCallId,
     )
     "error" -> ChatBlock.Notice(message.content, isError = true)
     "notice", "status", "command" -> ChatBlock.Notice(message.content)

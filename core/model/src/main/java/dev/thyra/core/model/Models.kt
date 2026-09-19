@@ -60,6 +60,7 @@ sealed interface ChatBlock {
     val running: Boolean = false,
     val failed: Boolean = false,
     val elapsedSeconds: Double? = null,
+    val toolCallId: String? = null,
   ) : ChatBlock
   data class Notice(val content: String, val isError: Boolean = false) : ChatBlock
 }
