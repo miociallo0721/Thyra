@@ -162,6 +162,7 @@ class DefaultThyraRepository(
 
   override suspend fun loadSessions(profile: ServerProfile, agentId: String): List<ChatSession> =
     authorized(profile) { credential -> service.sessions(profile.baseUrl, credential, agentId) }
+      .distinctBy(ChatSession::id)
 
   override suspend fun createSession(profile: ServerProfile, agentId: String): ChatSession =
     authorized(profile) { credential -> service.createSession(profile.baseUrl, credential, agentId) }

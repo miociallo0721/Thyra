@@ -203,6 +203,28 @@ class DefaultThyraRepositoryTest {
 
     assertEquals("new", (service.chatCredentialProvider?.invoke() as? RequestCredential.Bearer)?.token)
   }
+
+  @Test
+  fun loadSessions_deduplicatesIds() = runTest {
+    val profile = ServerProfile("server", "Home", "https://memoh.example")
+    val service = FakeMemohService().apply {
+      sessionResult = listOf(
+        ChatSession("s1", "bot", title = "First"),
+        ChatSession("s1", "bot", title = "Duplicate"),
+        ChatSession("s2", "bot", title = "Second"),
+      )
+    }
+    val repository = DefaultThyraRepository(
+      service,
+      InMemorySelections(PersistedState()),
+      InMemoryCredentials().apply { put(profile.id, StoredCredential("token")) },
+    )
+
+    val sessions = repository.loadSessions(profile, "bot")
+
+    assertEquals(listOf("s1", "s2"), sessions.map(ChatSession::id))
+    assertEquals("First", sessions.first().title)
+  }
 }
 
 private class InMemorySelections(initial: PersistedState) : SelectionStore {
@@ -224,6 +246,7 @@ private class FakeMemohService : MemohService {
   var refreshCalls = 0
   var discoverCalls = 0
   var rejectCloudAgents = false
+  var sessionResult: List<ChatSession> = emptyList()
   var chatCredentialProvider: (() -> RequestCredential?)? = null
   override suspend fun discover(input: String): Pair<String, ServerCapabilities> {
     discoverCalls++
@@ -251,7 +274,7 @@ private class FakeMemohService : MemohService {
     if (token != null && token in rejectedAgentTokens) throw ApiException(401, "auth.expired", "expired")
     return listOf(Agent("a1", "shio", "Shio"))
   }
-  override suspend fun sessions(baseUrl: String, credential: RequestCredential, botId: String) = emptyList<ChatSession>()
+  override suspend fun sessions(baseUrl: String, credential: RequestCredential, botId: String) = sessionResult
   override suspend fun createSession(baseUrl: String, credential: RequestCredential, botId: String, title: String) = ChatSession("s1", botId, title = "New")
   override suspend fun messages(baseUrl: String, credential: RequestCredential, botId: String, sessionId: String) = emptyList<ChatTurn>()
   override fun openChatSocket(
