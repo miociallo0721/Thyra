@@ -22,6 +22,7 @@ class ConnectionScreenTest {
           profiles = emptyList(),
           busy = false,
           errorMessage = null,
+          onOfficialCloud = {},
           onAddServer = { _, _ -> },
           onSelectProfile = {},
           onExploreDemo = {},

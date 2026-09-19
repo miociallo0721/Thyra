@@ -32,8 +32,11 @@ class AuthenticationScreenTest {
           ),
           busy = false,
           errorMessage = null,
+          cloudEmailCodeSent = false,
           onPasswordLogin = { _, _ -> },
           onTokenLogin = {},
+          onSendCloudEmailCode = {},
+          onCloudLogin = { _, _ -> },
           onBack = {},
         )
       }
@@ -44,5 +47,33 @@ class AuthenticationScreenTest {
     composeRule.onNodeWithText("邮箱或用户名").performTextInput("alice@example.com")
     composeRule.onNodeWithText("密码").performTextInput("secret")
     composeRule.onNodeWithText("登录").assertIsEnabled()
+  }
+
+  @Test
+  fun cloudLoginUsesNativeEmailCodeFields() {
+    composeRule.setContent {
+      ThyraTheme {
+        AuthenticationScreen(
+          profile = ServerProfile(
+            id = "memoh-cloud",
+            displayName = "Memoh Cloud",
+            baseUrl = "https://app.memoh.net/api/memoh",
+            authMode = AuthMode.Cloud,
+          ),
+          busy = false,
+          errorMessage = null,
+          cloudEmailCodeSent = true,
+          onPasswordLogin = { _, _ -> },
+          onTokenLogin = {},
+          onSendCloudEmailCode = {},
+          onCloudLogin = { _, _ -> },
+          onBack = {},
+        )
+      }
+    }
+
+    composeRule.onNodeWithText("验证码").assertIsDisplayed()
+    composeRule.onNodeWithText("重新发送验证码").assertIsDisplayed()
+    composeRule.onNodeWithText("登录").assertIsNotEnabled()
   }
 }

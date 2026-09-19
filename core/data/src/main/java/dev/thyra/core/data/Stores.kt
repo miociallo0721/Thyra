@@ -60,7 +60,12 @@ class DataStoreSelectionStore(
 }
 
 @Serializable
-data class StoredCredential(val token: String, val expiresAt: String? = null)
+data class StoredCredential(
+  val token: String? = null,
+  val expiresAt: String? = null,
+  val sessionCookie: String? = null,
+  val teamId: String? = null,
+)
 
 interface CredentialStore {
   fun get(serverId: String): StoredCredential?

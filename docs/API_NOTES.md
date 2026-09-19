@@ -25,6 +25,46 @@ Thyra validates with `/ping`, not with an arbitrary successful page.
 
 Because an expired JWT cannot call `/auth/refresh`, Thyra refreshes shortly before expiration and otherwise requires a new login.
 
+## Official Cloud
+
+Official Memoh Cloud at `https://app.memoh.net` uses a platform gateway in
+front of the Memoh API. This was checked against the same upstream commit above,
+the current Cloud login Web client, and the deployed Cloud endpoints on
+2026-09-19.
+
+- Platform/account routes are rooted at `https://app.memoh.net/api/v1`.
+- Memoh REST and WebSocket routes are proxied under
+  `https://app.memoh.net/api/memoh`.
+- Cloud authentication uses a secure HttpOnly session cookie, not the
+  self-hosted `/auth/login` Bearer JWT.
+- Team-scoped requests include `X-Team-Id`. Thyra currently selects the first
+  available team after login.
+- Native email-code login sends `POST /auth/email-code/send` with `email` and
+  `preferred_locale`, then verifies `email` and `code` with
+  `POST /auth/email-code/verify`.
+- Thyra stores the resulting cookie only in its Android Keystore-encrypted
+  credential store. It is never written to DataStore, Room, logs, fixtures, or
+  UI state.
+
+Cloud WebSockets require a fresh one-time ticket for every handshake, including
+reconnects:
+
+```text
+POST /api/v1/ws-tickets        Cookie + X-Team-Id
+GET  /api/memoh/bots/{bot_id}/web/ws?ticket={one-time-ticket}
+```
+
+The ticket query parameter is required by the Cloud gateway and is deliberately
+short-lived. The persistent session cookie remains in an HTTP header and is
+never placed in the URL. Tickets are neither stored nor reused.
+
+The deployed Cloud reports GitHub and Google OAuth providers, but its OAuth
+login endpoint rejects a custom-scheme `return_to` such as `thyra://auth` while
+accepting same-origin HTTPS returns. Thyra therefore supports the native email
+code flow and does not expose a non-functional WebView, Custom Tab, or guessed
+OAuth exchange. GitHub/Google can be added when Cloud provides an Android-safe
+redirect or device authorization flow.
+
 ## Milestone REST endpoints
 
 ```text
@@ -121,3 +161,8 @@ Relevant conditions include unauthorized/forbidden, busy or conflicting session 
 - WebSocket envelope/control: `internal/handlers/local_channel.go`
 - runtime snapshot/delta: `internal/handlers/runtime_ws.go`, `internal/agent/runtime/session/types.go`
 - current Web client: `apps/web/src/composables/api/useChat.*.ts`
+- Cloud login reference: `apps/web/src/pages/login/index.vue`,
+  `apps/web/src/pages/login/login-submit.ts`, `apps/web/src/lib/auth-session.ts`
+- deployed Cloud assets inspected: `auth-DqW8acHw.js`,
+  `api-client-10KZkYL1.js`, `platform-api-DUBKryIM.js`, `team-BDpH2S-R.js`,
+  `user-BxaA_uZ_.js`

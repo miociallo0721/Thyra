@@ -2,6 +2,7 @@ package dev.thyra.core.network
 
 import dev.thyra.core.model.RuntimeCursor
 import dev.thyra.core.model.SocketStatus
+import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
@@ -25,10 +26,13 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 interface ChatConnection : AutoCloseable {
   val events: Flow<JsonObject>
@@ -43,7 +47,7 @@ class MemohChatSocket internal constructor(
   private val http: OkHttpClient,
   private val json: Json,
   private val baseUrl: String,
-  private val tokenProvider: () -> String?,
+  private val credentialProvider: () -> RequestCredential?,
   private val botId: String,
   private val sessionId: String,
 ) : ChatConnection {
@@ -53,6 +57,7 @@ class MemohChatSocket internal constructor(
   private val reliable = linkedMapOf<String, String>()
   private var socket: WebSocket? = null
   private var reconnectJob: Job? = null
+  private var connectJob: Job? = null
   private var reconnectDelayMillis = 1_000L
   private var cursor: RuntimeCursor? = null
 
@@ -106,17 +111,53 @@ class MemohChatSocket internal constructor(
 
   private fun connect() {
     if (closed.get()) return
-    val token = tokenProvider()?.trim().orEmpty()
-    if (token.isEmpty()) {
+    val credential = credentialProvider()
+    if (credential == null || credential.isEmpty()) {
       _status.value = SocketStatus.Expired
       return
     }
     _status.value = if (socket == null) SocketStatus.Connecting else SocketStatus.Reconnecting
-    val request = Request.Builder()
+    connectJob?.cancel()
+    connectJob = scope.launch {
+      try {
+        val request = socketRequest(credential)
+        if (closed.get() || credentialProvider() != credential) return@launch
+        val webSocket = http.newWebSocket(request, Listener(credential))
+        synchronized(lock) {
+          if (closed.get()) webSocket.close(1000, "screen closed") else socket = webSocket
+        }
+      } catch (failure: ApiException) {
+        if (failure.isUnauthorized) _status.value = SocketStatus.Expired else scheduleReconnect()
+      } catch (_: Throwable) {
+        scheduleReconnect()
+      }
+    }
+  }
+
+  private fun socketRequest(credential: RequestCredential): Request = when (credential) {
+    is RequestCredential.Bearer -> Request.Builder()
       .url(baseUrl.trimEnd('/') + "/bots/$botId/web/ws")
-      .header("Authorization", "Bearer $token")
+      .header("Authorization", "Bearer ${credential.token}")
       .build()
-    socket = http.newWebSocket(request, Listener(token))
+    is RequestCredential.Cloud -> {
+      val ticketResponse = http.newCall(
+        Request.Builder()
+          .url(credential.platformBaseUrl.trimEnd('/') + "/ws-tickets")
+          .header("Cookie", credential.cookieHeader)
+          .header("X-Team-Id", credential.teamId)
+          .post(ByteArray(0).toRequestBody("application/json".toMediaType()))
+          .build(),
+      ).execute()
+      val ticket = ticketResponse.use { response ->
+        if (!response.isSuccessful) throw ApiException(response.code, message = "无法获取 Cloud WebSocket ticket")
+        json.decodeFromString<WebSocketTicketDto>(response.body.string()).ticket
+      }
+      if (ticket.isBlank()) throw IOException("Cloud WebSocket ticket 为空")
+      val url = (baseUrl.trimEnd('/') + "/bots/$botId/web/ws").toHttpUrl().newBuilder()
+        .addQueryParameter("ticket", ticket)
+        .build()
+      Request.Builder().url(url).build()
+    }
   }
 
   private fun sendSubscription() {
@@ -134,10 +175,12 @@ class MemohChatSocket internal constructor(
     synchronized(lock) { socket?.send(payload) }
   }
 
-  private fun scheduleReconnect(webSocket: WebSocket) {
-    synchronized(lock) {
-      if (socket !== webSocket) return
-      socket = null
+  private fun scheduleReconnect(webSocket: WebSocket? = null) {
+    if (webSocket != null) {
+      synchronized(lock) {
+        if (socket !== webSocket) return
+        socket = null
+      }
     }
     if (closed.get() || _status.value == SocketStatus.Expired) return
     _status.value = SocketStatus.Reconnecting
@@ -149,7 +192,7 @@ class MemohChatSocket internal constructor(
     }
   }
 
-  private inner class Listener(private val handshakeToken: String) : WebSocketListener() {
+  private inner class Listener(private val handshakeCredential: RequestCredential) : WebSocketListener() {
     override fun onOpen(webSocket: WebSocket, response: Response) {
       if (!isActive(webSocket)) return
       reconnectDelayMillis = 1_000L
@@ -183,7 +226,7 @@ class MemohChatSocket internal constructor(
       if (response?.code == 401) {
         // A REST refresh can finish between this handshake and its response.
         // Retry with that newer credential before declaring the session expired.
-        if (tokenProvider()?.trim() != handshakeToken) {
+        if (handshakeCredential is RequestCredential.Bearer && credentialProvider() != handshakeCredential) {
           scheduleReconnect(webSocket)
         } else {
           synchronized(lock) {
@@ -213,6 +256,7 @@ class MemohChatSocket internal constructor(
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
     reconnectJob?.cancel()
+    connectJob?.cancel()
     synchronized(lock) {
       reliable.clear()
       socket?.close(1000, "screen closed")
@@ -220,6 +264,11 @@ class MemohChatSocket internal constructor(
     }
     eventQueue.close()
     _status.value = SocketStatus.Disconnected
+  }
+
+  private fun RequestCredential.isEmpty(): Boolean = when (this) {
+    is RequestCredential.Bearer -> token.isBlank()
+    is RequestCredential.Cloud -> cookieHeader.isBlank() || teamId.isBlank() || platformBaseUrl.isBlank()
   }
 }
 

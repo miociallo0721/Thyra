@@ -53,6 +53,7 @@ fun ThyraApp(viewModel: MainViewModel) {
           profiles = state.profiles,
           busy = state.busy,
           errorMessage = state.errorMessage,
+          onOfficialCloud = viewModel::useOfficialCloud,
           onAddServer = viewModel::addServer,
           onSelectProfile = viewModel::selectProfile,
           onExploreDemo = viewModel::exploreDemo,
@@ -65,8 +66,11 @@ fun ThyraApp(viewModel: MainViewModel) {
             profile = profile,
             busy = state.busy,
             errorMessage = state.errorMessage,
+            cloudEmailCodeSent = state.cloudEmailCodeSent,
             onPasswordLogin = viewModel::loginWithPassword,
             onTokenLogin = viewModel::loginWithToken,
+            onSendCloudEmailCode = viewModel::sendCloudEmailCode,
+            onCloudLogin = viewModel::loginWithCloudEmailCode,
             onBack = viewModel::back,
           )
         }

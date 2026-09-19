@@ -91,6 +91,9 @@ private class SessionSwitchRepository(
 
   override val persistedState: Flow<PersistedState> = state.asStateFlow()
   override suspend fun addServer(displayName: String, address: String) = ServerValidation(profile, ServerCapabilities())
+  override suspend fun addOfficialCloud() = profile
+  override suspend fun sendCloudEmailCode(email: String) = Unit
+  override suspend fun authenticateOfficialCloud(email: String, code: String) = account()
   override suspend fun authenticateWithPassword(profile: ServerProfile, identity: String, password: String) = account()
   override suspend fun authenticateWithToken(profile: ServerProfile, token: String) = account()
   override suspend fun restoreSelected(): RestoredConnection? = RestoredConnection(profile, account())

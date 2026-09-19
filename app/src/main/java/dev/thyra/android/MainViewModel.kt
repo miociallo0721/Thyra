@@ -125,11 +125,33 @@ class MainViewModel @Inject constructor(
     }
   }
 
+  fun useOfficialCloud() = launchAction {
+    cancelSessionOpening()
+    closeSocket()
+    val profile = repository.addOfficialCloud()
+    _uiState.update {
+      it.copy(
+        destination = AppDestination.Authentication,
+        selectedProfile = profile,
+        serverCapabilities = null,
+        cloudEmailCodeSent = false,
+      )
+    }
+    try {
+      val restored = repository.restoreSelected() ?: return@launchAction
+      restoreWorkspace(restored.profile, restored.account, repository.persistedState.first())
+    } catch (_: AuthenticationExpiredException) {
+      // A missing or expired Cloud cookie leaves the native login screen visible.
+    }
+  }
+
   fun selectProfile(profile: ServerProfile) = launchAction {
     cancelSessionOpening()
     closeSocket()
     repository.selectServer(profile.id)
-    _uiState.update { it.copy(selectedProfile = profile, destination = AppDestination.Authentication) }
+    _uiState.update {
+      it.copy(selectedProfile = profile, destination = AppDestination.Authentication, cloudEmailCodeSent = false)
+    }
     try {
       val restored = repository.restoreSelected() ?: return@launchAction
       val persisted = repository.persistedState.first()
@@ -154,10 +176,28 @@ class MainViewModel @Inject constructor(
     finishLogin(profile, account)
   }
 
+  fun sendCloudEmailCode(email: String) = launchAction {
+    repository.sendCloudEmailCode(email)
+    _uiState.update { it.copy(cloudEmailCodeSent = true) }
+  }
+
+  fun loginWithCloudEmailCode(email: String, code: String) = launchAction {
+    val profile = requireNotNull(_uiState.value.selectedProfile)
+    val account = repository.authenticateOfficialCloud(email, code)
+    finishLogin(profile, account)
+  }
+
   private suspend fun finishLogin(profile: ServerProfile, account: Account) {
     val agents = repository.loadAgents(profile)
     _uiState.update {
-      it.copy(destination = AppDestination.Agents, account = account, agents = agents, selectedAgent = null, sessions = emptyList())
+      it.copy(
+        destination = AppDestination.Agents,
+        account = account,
+        agents = agents,
+        selectedAgent = null,
+        sessions = emptyList(),
+        cloudEmailCodeSent = false,
+      )
     }
   }
 
@@ -390,7 +430,7 @@ class MainViewModel @Inject constructor(
         cancelSessionOpening()
         closeSocket()
         demoMode = false
-        _uiState.update { it.copy(destination = AppDestination.Connection, errorMessage = null) }
+        _uiState.update { it.copy(destination = AppDestination.Connection, cloudEmailCodeSent = false, errorMessage = null) }
       }
       AppDestination.Connection -> Unit
     }
@@ -400,7 +440,15 @@ class MainViewModel @Inject constructor(
     cancelSessionOpening()
     closeSocket()
     demoMode = false
-    _uiState.update { it.copy(destination = AppDestination.Connection, selectedAgent = null, selectedSession = null, errorMessage = null) }
+    _uiState.update {
+      it.copy(
+        destination = AppDestination.Connection,
+        selectedAgent = null,
+        selectedSession = null,
+        cloudEmailCodeSent = false,
+        errorMessage = null,
+      )
+    }
   }
 
   fun logout() {

@@ -32,7 +32,7 @@ class MemohApiClientTest {
     val baseUrl = server.url("/").toString().trimEnd('/')
 
     val auth = client.login(baseUrl, "alice", "secret")
-    val account = client.me(baseUrl, auth.accessToken)
+    val account = client.me(baseUrl, RequestCredential.Bearer(auth.accessToken))
 
     assertEquals("jwt-value", auth.accessToken)
     assertEquals("Alice", account.displayName)
@@ -61,8 +61,8 @@ class MemohApiClientTest {
     server.enqueue(jsonResponse("""{"items":[{"turn_id":"t1","turn_position":1,"role":"assistant","timestamp":"2026-09-19T00:00:00Z","messages":[{"id":1,"type":"text","content":"hello"},{"id":2,"type":"tool","name":"search","running":false,"input":{"q":"repo"},"output":{"count":2}}]}]}"""))
     val baseUrl = server.url("/").toString().trimEnd('/')
 
-    val agents = client.agents(baseUrl, "jwt")
-    val turns = client.messages(baseUrl, "jwt", "b1", "s1")
+    val agents = client.agents(baseUrl, RequestCredential.Bearer("jwt"))
+    val turns = client.messages(baseUrl, RequestCredential.Bearer("jwt"), "b1", "s1")
 
     assertEquals("Shio", agents.single().displayName)
     assertEquals(2, turns.single().blocks.size)
@@ -71,7 +71,47 @@ class MemohApiClientTest {
   @Test(expected = ApiException::class)
   fun unauthorized_isReportedAsApiException() = runTest {
     server.enqueue(MockResponse().setResponseCode(401).setBody("""{"code":"auth.expired","message":"expired"}"""))
-    client.me(server.url("/").toString().trimEnd('/'), "expired")
+    client.me(server.url("/").toString().trimEnd('/'), RequestCredential.Bearer("expired"))
+  }
+
+  @Test
+  fun cloudEmailFlow_capturesSessionCookieAndUsesPlatformShapes() = runTest {
+    server.enqueue(jsonResponse("""{"ok":true}"""))
+    server.enqueue(
+      jsonResponse("""{"ok":true}""")
+        .addHeader("Set-Cookie", "memoh_session=session-value; HttpOnly; Path=/"),
+    )
+    server.enqueue(jsonResponse("""{"teams":[{"team":{"team_id":"team-1","name":"Personal","slug":"personal"},"role":"OWNER"}]}"""))
+    server.enqueue(jsonResponse("""{"user":{"user_id":"user-1","email":"alice@example.com","display_name":"Alice"}}"""))
+    val platformUrl = server.url("/api/v1").toString().trimEnd('/')
+
+    client.sendCloudEmailCode(platformUrl, "alice@example.com", "zh-CN")
+    val session = client.verifyCloudEmailCode(platformUrl, "alice@example.com", "123456")
+    val teams = client.cloudTeams(platformUrl, session.cookieHeader)
+    val account = client.cloudMe(platformUrl, session.cookieHeader)
+
+    assertEquals("memoh_session=session-value", session.cookieHeader)
+    assertEquals("team-1", teams.single().id)
+    assertEquals("Alice", account.displayName)
+    assertEquals("/api/v1/auth/email-code/send", server.takeRequest().path)
+    assertEquals("/api/v1/auth/email-code/verify", server.takeRequest().path)
+    assertEquals("memoh_session=session-value", server.takeRequest().getHeader("Cookie"))
+    assertEquals("memoh_session=session-value", server.takeRequest().getHeader("Cookie"))
+  }
+
+  @Test
+  fun cloudProxy_usesCookieAndTeamHeaderWithoutBearer() = runTest {
+    server.enqueue(jsonResponse("""{"items":[]}"""))
+    val baseUrl = server.url("/api/memoh").toString().trimEnd('/')
+    val credential = RequestCredential.Cloud("memoh_session=secret", "team-1", "https://app.memoh.net/api/v1")
+
+    client.agents(baseUrl, credential)
+
+    val request = server.takeRequest()
+    assertEquals("/api/memoh/bots", request.path)
+    assertEquals("memoh_session=secret", request.getHeader("Cookie"))
+    assertEquals("team-1", request.getHeader("X-Team-Id"))
+    assertEquals(null, request.getHeader("Authorization"))
   }
 
   private fun jsonResponse(body: String) = MockResponse()

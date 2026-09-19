@@ -12,7 +12,7 @@ data class ServerProfile(
 )
 
 @Serializable
-enum class AuthMode { Credentials, AccessToken }
+enum class AuthMode { Credentials, AccessToken, Cloud }
 
 data class ServerCapabilities(
   val version: String? = null,
@@ -114,6 +114,7 @@ data class ThyraUiState(
   val live: LiveChatState = LiveChatState(),
   val socketStatus: SocketStatus = SocketStatus.Disconnected,
   val busy: Boolean = false,
+  val cloudEmailCodeSent: Boolean = false,
   val errorMessage: String? = null,
 ) {
   val visibleTurns: List<ChatTurn>

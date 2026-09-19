@@ -4,6 +4,28 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
+@Serializable internal data class CloudEmailCodeRequestDto(
+  val email: String,
+  @SerialName("preferred_locale") val preferredLocale: String,
+)
+
+@Serializable internal data class CloudEmailCodeVerifyDto(val email: String, val code: String)
+
+@Serializable internal data class CloudTeamListDto(val teams: List<CloudTeamMembershipDto> = emptyList())
+
+@Serializable internal data class CloudTeamMembershipDto(
+  val team: CloudTeamDto = CloudTeamDto(),
+  val role: String = "",
+)
+
+@Serializable internal data class CloudTeamDto(
+  @SerialName("team_id") val teamId: String = "",
+  val name: String = "",
+  val slug: String = "",
+)
+
+@Serializable internal data class WebSocketTicketDto(val ticket: String)
+
 @Serializable internal data class PingDto(
   val status: String = "",
   val version: String? = null,

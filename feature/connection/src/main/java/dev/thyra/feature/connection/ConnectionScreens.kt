@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,12 +47,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.thyra.core.designsystem.InlineError
 import dev.thyra.core.model.ServerProfile
+import dev.thyra.core.model.AuthMode
 
 @Composable
 fun ConnectionScreen(
   profiles: List<ServerProfile>,
   busy: Boolean,
   errorMessage: String?,
+  onOfficialCloud: () -> Unit,
   onAddServer: (displayName: String, address: String) -> Unit,
   onSelectProfile: (ServerProfile) -> Unit,
   onExploreDemo: () -> Unit,
@@ -75,6 +79,17 @@ fun ConnectionScreen(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
       Spacer(Modifier.height(36.dp))
+
+      FilledTonalButton(
+        onClick = onOfficialCloud,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !busy,
+      ) {
+        Icon(Icons.Outlined.Cloud, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text("使用 Memoh Cloud")
+      }
+      Spacer(Modifier.height(28.dp))
 
       if (profiles.isNotEmpty()) {
         Text("已保存的服务器", style = MaterialTheme.typography.titleSmall)
@@ -148,8 +163,11 @@ fun AuthenticationScreen(
   profile: ServerProfile,
   busy: Boolean,
   errorMessage: String?,
+  cloudEmailCodeSent: Boolean,
   onPasswordLogin: (identity: String, password: String) -> Unit,
   onTokenLogin: (token: String) -> Unit,
+  onSendCloudEmailCode: (email: String) -> Unit,
+  onCloudLogin: (email: String, code: String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -160,6 +178,8 @@ fun AuthenticationScreen(
   var identity by rememberSaveable { mutableStateOf("") }
   var password by remember { mutableStateOf("") }
   var token by remember { mutableStateOf("") }
+  var cloudEmail by rememberSaveable { mutableStateOf("") }
+  var cloudCode by remember { mutableStateOf("") }
   Scaffold(
     modifier = modifier.imePadding(),
     topBar = {
@@ -180,7 +200,28 @@ fun AuthenticationScreen(
       Text("登录 Memoh", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
       Text(profile.baseUrl, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
       Spacer(Modifier.height(28.dp))
-      if (useToken) {
+      if (profile.authMode == AuthMode.Cloud) {
+        OutlinedTextField(
+          value = cloudEmail,
+          onValueChange = { cloudEmail = it },
+          modifier = Modifier.fillMaxWidth(),
+          label = { Text("邮箱") },
+          supportingText = { Text("验证码将发送到你的 Cloud 账号邮箱") },
+          singleLine = true,
+          keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+        )
+        if (cloudEmailCodeSent) {
+          Spacer(Modifier.height(12.dp))
+          OutlinedTextField(
+            value = cloudCode,
+            onValueChange = { cloudCode = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("验证码") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+          )
+        }
+      } else if (useToken) {
         OutlinedTextField(
           value = token,
           onValueChange = { token = it },
@@ -217,15 +258,35 @@ fun AuthenticationScreen(
       }
       Spacer(Modifier.height(20.dp))
       Button(
-        onClick = { if (useToken) onTokenLogin(token) else onPasswordLogin(identity, password) },
+        onClick = {
+          when {
+            profile.authMode == AuthMode.Cloud && cloudEmailCodeSent -> onCloudLogin(cloudEmail, cloudCode)
+            profile.authMode == AuthMode.Cloud -> onSendCloudEmailCode(cloudEmail)
+            useToken -> onTokenLogin(token)
+            else -> onPasswordLogin(identity, password)
+          }
+        },
         modifier = Modifier.fillMaxWidth(),
-        enabled = !busy && if (useToken) token.isNotBlank() else identity.isNotBlank() && password.isNotBlank(),
+        enabled = !busy && when {
+          profile.authMode == AuthMode.Cloud && cloudEmailCodeSent -> cloudEmail.isNotBlank() && cloudCode.isNotBlank()
+          profile.authMode == AuthMode.Cloud -> cloudEmail.isNotBlank()
+          useToken -> token.isNotBlank()
+          else -> identity.isNotBlank() && password.isNotBlank()
+        },
       ) {
         if (busy) CircularProgressIndicator(modifier = Modifier.height(18.dp), strokeWidth = 2.dp)
-        else Text("登录")
+        else Text(if (profile.authMode == AuthMode.Cloud && !cloudEmailCodeSent) "发送验证码" else "登录")
       }
-      TextButton(onClick = { useToken = !useToken }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-        Text(if (useToken) "改用邮箱和密码" else "改用访问令牌")
+      if (profile.authMode == AuthMode.Cloud && cloudEmailCodeSent) {
+        TextButton(
+          onClick = { onSendCloudEmailCode(cloudEmail) },
+          modifier = Modifier.align(Alignment.CenterHorizontally),
+          enabled = !busy && cloudEmail.isNotBlank(),
+        ) { Text("重新发送验证码") }
+      } else if (profile.authMode != AuthMode.Cloud) {
+        TextButton(onClick = { useToken = !useToken }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+          Text(if (useToken) "改用邮箱和密码" else "改用访问令牌")
+        }
       }
     }
   }

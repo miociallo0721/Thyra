@@ -10,6 +10,7 @@ Thyra 是通往 Memoh Agent 与工作区的原生 Android 入口。应用使用 
 
 首个可用的纵向功能切片已经完成：
 
+- 使用原生邮箱验证码登录官方 Memoh Cloud；
 - 添加并验证多个自定义 Memoh 服务器；
 - 优先使用邮箱和密码登录，同时兼容用户名和密码或现有访问令牌；
 - 使用 Android Keystore AES-GCM 密钥加密凭据；
@@ -43,10 +44,13 @@ Debug APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。
 
 ### 连接 Memoh
 
-1. 启动 Thyra，输入可公开访问的 Memoh API 地址。
-2. 可以填写 `https://host:8080` 这样的后端直连地址。若使用反向代理部署 Web 服务，请填写 `https://host/api`；当输入的根地址不是 Memoh API 时，Thyra 也会自动探测 `/api` 后缀。
-3. 优先使用 Memoh 邮箱和密码登录；也可以使用用户名和密码，或粘贴访问令牌。
-4. 选择一个 Bot，然后打开或创建会话。
+1. 使用官方服务时，选择“使用 Memoh Cloud”，输入邮箱并用收到的验证码登录。
+2. 使用自托管服务时，输入可公开访问的 Memoh API 地址。
+3. 自托管地址可以是 `https://host:8080` 这样的后端直连地址。若使用反向代理部署 Web 服务，请填写 `https://host/api`；当输入的根地址不是 Memoh API 时，Thyra 也会自动探测 `/api` 后缀。
+4. 自托管服务优先使用 Memoh 邮箱和密码登录；也可以使用用户名和密码，或粘贴访问令牌。
+5. 选择一个 Bot，然后打开或创建会话。
+
+官方 Cloud 的 GitHub/Google OAuth 目前只接受同源网页回调，不接受 Android 自定义 scheme，因此 Thyra 暂不显示无法完成的第三方登录入口。
 
 生产构建通过 Android 网络安全策略拒绝明文 HTTP。Debug 构建仅为明确的本地开发场景允许 HTTP，任何构建都不会禁用 TLS 证书验证。
 
@@ -80,6 +84,7 @@ Thyra is a native Android doorway to Memoh agents and their workspaces. It is bu
 
 The first vertical slice is implemented:
 
+- sign in to official Memoh Cloud with a native email verification code flow;
 - add and validate multiple custom Memoh servers;
 - sign in primarily with email/password while retaining username/password and access-token compatibility;
 - encrypt credentials with an Android Keystore AES-GCM key;
@@ -113,10 +118,13 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 ### Connect to Memoh
 
-1. Start Thyra and enter the public Memoh API address.
-2. A direct backend address such as `https://host:8080` works. For a reverse-proxied Web deployment, use `https://host/api`; Thyra also probes that suffix automatically when the entered root is not a Memoh API.
-3. Prefer a Memoh email and password; a username and password or an existing access token also works.
-4. Select a Bot, then open or create a session.
+1. For the hosted service, choose “Memoh Cloud”, enter your email, and sign in with the verification code you receive.
+2. For self-hosted Memoh, enter the public Memoh API address.
+3. A direct backend address such as `https://host:8080` works. For a reverse-proxied Web deployment, use `https://host/api`; Thyra also probes that suffix automatically when the entered root is not a Memoh API.
+4. Self-hosted servers prefer a Memoh email and password; a username and password or an existing access token also works.
+5. Select a Bot, then open or create a session.
+
+Official Cloud currently accepts only same-origin Web callbacks for GitHub and Google OAuth, not Android custom schemes, so Thyra does not present a third-party login button that cannot complete.
 
 Production builds reject cleartext HTTP through the Android network security policy. Debug builds permit HTTP for explicit local development only. TLS certificate verification is never disabled.
 
