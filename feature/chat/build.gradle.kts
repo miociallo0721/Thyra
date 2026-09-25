@@ -27,4 +27,5 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.markwon.core)
   debugImplementation(libs.androidx.compose.ui.tooling)
+  testImplementation(libs.junit)
 }

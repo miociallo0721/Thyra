@@ -75,7 +75,7 @@ data class ChatTurn(
   val isPending: Boolean = false,
 )
 
-enum class SocketStatus { Disconnected, Connecting, Connected, Reconnecting, Expired }
+enum class SocketStatus { Disconnected, Connecting, Connected, Reconnecting, Expired, Forbidden }
 
 data class RuntimeCursor(val epoch: String, val sequence: Long)
 
@@ -118,5 +118,9 @@ data class ThyraUiState(
   val errorMessage: String? = null,
 ) {
   val visibleTurns: List<ChatTurn>
-    get() = if (live.activeTurn == null) history else history.filterNot { it.id == live.activeTurn.id } + live.activeTurn
+    get() {
+      val activeTurn = live.activeTurn ?: return history
+      val replacedIndex = history.indexOfLast { it.id == activeTurn.id }
+      return history.filterIndexed { index, _ -> index != replacedIndex } + activeTurn
+    }
 }

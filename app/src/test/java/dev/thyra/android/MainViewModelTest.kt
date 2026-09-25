@@ -7,6 +7,7 @@ import dev.thyra.core.data.ServerValidation
 import dev.thyra.core.data.ThyraRepository
 import dev.thyra.core.model.Account
 import dev.thyra.core.model.Agent
+import dev.thyra.core.model.AuthMode
 import dev.thyra.core.model.ChatSession
 import dev.thyra.core.model.ChatTurn
 import dev.thyra.core.model.RuntimeCursor
@@ -32,6 +33,7 @@ import kotlinx.serialization.json.JsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -78,6 +80,33 @@ class MainViewModelTest {
     assertEquals(listOf("second"), repository.connections.map { it.sessionId })
     assertFalse(repository.connections.single().closed)
   }
+
+  @Test
+  fun forbiddenCloudSocketShowsTicketErrorWhileKeepingHistory() = runTest(dispatcher) {
+    val profile = ServerProfile("cloud", "Memoh Cloud", "https://app.memoh.net/api/memoh", AuthMode.Cloud)
+    val agent = Agent("bot", "shio", "Shio")
+    val session = ChatSession("session", agent.id, title = "History")
+    val repository = SessionSwitchRepository(profile, agent, listOf(session))
+    val viewModel = MainViewModel(repository)
+    advanceUntilIdle()
+
+    viewModel.selectProfile(profile)
+    advanceUntilIdle()
+    viewModel.selectAgent(agent)
+    advanceUntilIdle()
+    viewModel.selectSession(session)
+    runCurrent()
+    val history = listOf(ChatTurn("turn", dev.thyra.core.model.ChatRole.User, "saved message"))
+    repository.history(session.id).complete(history)
+    advanceUntilIdle()
+
+    repository.connections.single().deny()
+    runCurrent()
+
+    assertEquals(SocketStatus.Forbidden, viewModel.uiState.value.socketStatus)
+    assertEquals(history, viewModel.uiState.value.visibleTurns)
+    assertTrue(viewModel.uiState.value.errorMessage.orEmpty().contains("ticket 请求被拒绝（HTTP 403）"))
+  }
 }
 
 private class SessionSwitchRepository(
@@ -118,6 +147,7 @@ private class FakeChatConnection(val sessionId: String) : ChatConnection {
   var closed = false
   override val events: Flow<JsonObject> = mutableEvents
   override val status: StateFlow<SocketStatus> = mutableStatus
+  fun deny() { mutableStatus.value = SocketStatus.Forbidden }
   override fun updateCursor(value: RuntimeCursor?) = Unit
   override fun requestSnapshot() = Unit
   override fun sendMessage(text: String, invocationId: String) = invocationId

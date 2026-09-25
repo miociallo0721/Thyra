@@ -26,7 +26,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -127,7 +126,11 @@ class MemohChatSocket internal constructor(
           if (closed.get()) webSocket.close(1000, "screen closed") else socket = webSocket
         }
       } catch (failure: ApiException) {
-        if (failure.isUnauthorized) _status.value = SocketStatus.Expired else scheduleReconnect()
+        when (failure.statusCode) {
+          401 -> _status.value = SocketStatus.Expired
+          403 -> _status.value = SocketStatus.Forbidden
+          else -> scheduleReconnect()
+        }
       } catch (_: Throwable) {
         scheduleReconnect()
       }
@@ -140,12 +143,15 @@ class MemohChatSocket internal constructor(
       .header("Authorization", "Bearer ${credential.token}")
       .build()
     is RequestCredential.Cloud -> {
+      val platformUrl = credential.platformBaseUrl.toHttpUrl()
+      val origin = platformUrl.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')
       val ticketResponse = http.newCall(
         Request.Builder()
           .url(credential.platformBaseUrl.trimEnd('/') + "/ws-tickets")
           .header("Cookie", credential.cookieHeader)
           .header("X-Team-Id", credential.teamId)
-          .post(ByteArray(0).toRequestBody("application/json".toMediaType()))
+          .header("Origin", origin)
+          .post(ByteArray(0).toRequestBody())
           .build(),
       ).execute()
       val ticket = ticketResponse.use { response ->
@@ -154,6 +160,7 @@ class MemohChatSocket internal constructor(
       }
       if (ticket.isBlank()) throw IOException("Cloud WebSocket ticket 为空")
       val url = (baseUrl.trimEnd('/') + "/bots/$botId/web/ws").toHttpUrl().newBuilder()
+        .addQueryParameter("team_id", credential.teamId)
         .addQueryParameter("ticket", ticket)
         .build()
       Request.Builder().url(url).build()
@@ -182,7 +189,7 @@ class MemohChatSocket internal constructor(
         socket = null
       }
     }
-    if (closed.get() || _status.value == SocketStatus.Expired) return
+    if (closed.get() || _status.value == SocketStatus.Expired || _status.value == SocketStatus.Forbidden) return
     _status.value = SocketStatus.Reconnecting
     reconnectJob?.cancel()
     reconnectJob = scope.launch {
@@ -223,7 +230,12 @@ class MemohChatSocket internal constructor(
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
       if (!isActive(webSocket)) return
-      if (response?.code == 401) {
+      if (response?.code == 403) {
+        synchronized(lock) {
+          if (socket === webSocket) socket = null
+        }
+        _status.value = SocketStatus.Forbidden
+      } else if (response?.code == 401) {
         // A REST refresh can finish between this handshake and its response.
         // Retry with that newer credential before declaring the session expired.
         if (handshakeCredential is RequestCredential.Bearer && credentialProvider() != handshakeCredential) {

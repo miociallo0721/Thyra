@@ -9,6 +9,7 @@ import dev.thyra.core.data.ThyraRepository
 import dev.thyra.core.model.Account
 import dev.thyra.core.model.Agent
 import dev.thyra.core.model.AppDestination
+import dev.thyra.core.model.AuthMode
 import dev.thyra.core.model.ChatBlock
 import dev.thyra.core.model.ChatRole
 import dev.thyra.core.model.ChatSession
@@ -262,6 +263,7 @@ class MainViewModel @Inject constructor(
         history = if (preserveTranscript) it.history else emptyList(),
         live = LiveChatState(),
         socketStatus = if (demoMode) SocketStatus.Connected else SocketStatus.Connecting,
+        errorMessage = null,
       )
     }
     openSessionJob = viewModelScope.launch {
@@ -315,7 +317,18 @@ class MainViewModel @Inject constructor(
     socketStatusJob = viewModelScope.launch {
       connection.status.collect { status ->
         if (socket !== connection || !isCurrentSessionOpening(generation)) return@collect
-        _uiState.update { it.copy(socketStatus = status) }
+        _uiState.update {
+          it.copy(
+            socketStatus = status,
+            errorMessage = if (status == SocketStatus.Forbidden) {
+              if (it.selectedProfile?.authMode == AuthMode.Cloud) {
+                "Cloud WebSocket ticket 请求被拒绝（HTTP 403）。请检查当前团队权限或重新登录。"
+              } else {
+                "聊天连接被拒绝（HTTP 403）。请检查会话权限。"
+              }
+            } else it.errorMessage,
+          )
+        }
         if (status == SocketStatus.Expired) {
           _uiState.value.selectedProfile?.let { repository.logout(it.id) }
           if (socket !== connection || !isCurrentSessionOpening(generation)) return@collect

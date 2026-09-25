@@ -1,6 +1,7 @@
 package dev.thyra.core.network
 
 import kotlinx.coroutines.test.runTest
+import dev.thyra.core.model.ChatRole
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -66,6 +67,20 @@ class MemohApiClientTest {
 
     assertEquals("Shio", agents.single().displayName)
     assertEquals(2, turns.single().blocks.size)
+  }
+
+  @Test
+  fun historyWithRepeatedTurnIdPreservesBothMessages() = runTest {
+    server.enqueue(jsonResponse("""{"items":[{"turn_id":"same","turn_position":1,"role":"user","text":"question"},{"turn_id":"same","turn_position":2,"role":"assistant","messages":[{"id":1,"type":"text","content":"answer"}]}]}"""))
+
+    val turns = client.messages(server.url("/").toString().trimEnd('/'), RequestCredential.Bearer("jwt"), "bot", "session")
+
+    assertEquals(2, turns.size)
+    assertEquals(listOf("same", "same"), turns.map { it.id })
+    assertEquals(listOf(ChatRole.User, ChatRole.Assistant), turns.map { it.role })
+    assertEquals("question", turns[0].text)
+    assertEquals(1, turns[1].blocks.size)
+    assertEquals(listOf(1L, 2L), turns.map { it.position })
   }
 
   @Test(expected = ApiException::class)

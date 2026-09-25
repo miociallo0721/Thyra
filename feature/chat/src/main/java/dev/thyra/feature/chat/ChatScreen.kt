@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -95,6 +95,7 @@ fun ChatScreen(
   val listState = rememberLazyListState()
   var pinnedToBottom by remember { mutableStateOf(true) }
   val contentVersion = turns.lastOrNull()?.let { it.id to it.hashCode() }
+  val rowKeys = remember(session.id, turns) { chatTurnRowKeys(session.id, turns) }
 
   LaunchedEffect(listState) {
     snapshotFlow { listState.isNearBottom() }
@@ -147,13 +148,24 @@ fun ChatScreen(
           verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
           item(key = "top-space") { Spacer(Modifier.height(4.dp)) }
-          items(turns, key = ChatTurn::id) { turn ->
+          itemsIndexed(turns, key = { index, _ -> rowKeys[index] }) { _, turn ->
             ChatTurnView(turn, agent, Modifier.padding(horizontal = 18.dp))
           }
           item(key = "bottom-space") { Spacer(Modifier.height(8.dp)) }
         }
       }
     }
+  }
+}
+
+// A server turn_id can occur more than once in REST history. Keep every turn and
+// distinguish repeated IDs by their occurrence within this session.
+internal fun chatTurnRowKeys(sessionId: String, turns: List<ChatTurn>): List<String> {
+  val occurrences = mutableMapOf<String, Int>()
+  return turns.map { turn ->
+    val occurrence = occurrences.getOrDefault(turn.id, 0)
+    occurrences[turn.id] = occurrence + 1
+    "turn:${sessionId.length}:$sessionId:${turn.id.length}:${turn.id}:$occurrence"
   }
 }
 
@@ -403,6 +415,7 @@ private fun socketLabel(status: SocketStatus, generating: Boolean) = when {
   generating -> "正在生成"
   status == SocketStatus.Connected -> "已连接"
   status == SocketStatus.Expired -> "登录已过期"
+  status == SocketStatus.Forbidden -> "连接被拒绝"
   status == SocketStatus.Reconnecting -> "正在重连"
   status == SocketStatus.Connecting -> "正在连接"
   else -> "已断开"

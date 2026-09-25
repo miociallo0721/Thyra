@@ -50,13 +50,34 @@ Cloud WebSockets require a fresh one-time ticket for every handshake, including
 reconnects:
 
 ```text
-POST /api/v1/ws-tickets        Cookie + X-Team-Id
-GET  /api/memoh/bots/{bot_id}/web/ws?ticket={one-time-ticket}
+POST /api/v1/ws-tickets        Cookie + X-Team-Id + same-origin Origin, no body
+GET  /api/memoh/bots/{bot_id}/web/ws?team_id={team_id}&ticket={one-time-ticket}
 ```
 
 The ticket query parameter is required by the Cloud gateway and is deliberately
 short-lived. The persistent session cookie remains in an HTTP header and is
 never placed in the URL. Tickets are neither stored nor reused.
+
+Cloud ticket contract rechecked on 2026-09-25 against upstream Memoh commit
+`1cbddba12b61c68f998a119f81d11e33fd220550` (`spec/swagger.yaml`,
+`internal/handlers/local_channel.go`, `internal/auth/jwt.go`,
+`apps/web/src/lib/api-client.ts`, and `apps/web/src/composables/api/useChat.ws.ts`)
+and the deployed Cloud Web assets `api-client-DsMojZ6a.js` and
+`chat-list-CcPwhFNk.js`. The upstream
+OpenAPI and Go handler describe `/bots/{bot_id}/web/ws`; they do not contain
+the Cloud platform's `/api/v1/ws-tickets` endpoint. The public Web source
+uses `sdkAuthQuery()` to pass its local token to Memoh directly, while the
+deployed Cloud client calls `/api/v1/ws-tickets` with browser cookies and
+`X-Team-Id`, then appends `team_id` and the returned ticket to the socket URL.
+Its ticket POST has no request body. The browser's same-origin POST sends an
+`Origin` header; the native request supplies that same origin explicitly.
+The Android client continues to keep the persistent Cloud cookie in an HTTP
+header and uses only a one-time ticket in the WebSocket URL.
+With the current first-team selection, the D-drive `thyra_security_test` AVD
+restored a Cloud session, loaded Shio history, connected the socket, and
+persisted a marked test reply. For that account, selecting the first team
+was not the cause of the ticket 403. Accounts with multiple teams still lack
+a team chooser in Thyra.
 
 The deployed Cloud reports GitHub and Google OAuth providers, but its OAuth
 login endpoint rejects a custom-scheme `return_to` such as `thyra://auth` while
