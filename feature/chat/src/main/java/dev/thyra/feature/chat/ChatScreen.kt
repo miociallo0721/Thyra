@@ -4,6 +4,9 @@ import android.graphics.Color as AndroidColor
 import android.text.method.LinkMovementMethod
 import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -45,8 +49,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -60,7 +66,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -68,6 +79,8 @@ import dev.thyra.core.designsystem.AgentAvatar
 import dev.thyra.core.designsystem.EmptyState
 import dev.thyra.core.designsystem.InlineError
 import dev.thyra.core.designsystem.StatusLabel
+import dev.thyra.core.designsystem.GlassSurface
+import dev.thyra.core.designsystem.ThyraThemeTokens
 import dev.thyra.core.model.Agent
 import dev.thyra.core.model.ChatBlock
 import dev.thyra.core.model.ChatRole
@@ -84,16 +97,23 @@ fun ChatScreen(
   session: ChatSession,
   turns: List<ChatTurn>,
   socketStatus: SocketStatus,
+  serverName: String,
+  historyLoading: Boolean,
+  draft: String,
+  onDraftChange: (String) -> Unit,
   isGenerating: Boolean,
   errorMessage: String?,
+  onRetry: () -> Unit,
   onSend: (String) -> Unit,
   onStop: () -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
   showBack: Boolean = true,
 ) {
-  val listState = rememberLazyListState()
-  var pinnedToBottom by remember { mutableStateOf(true) }
+  val listState = rememberSaveable(session.id, saver = LazyListState.Saver) { LazyListState() }
+  var pinnedToBottom by rememberSaveable(session.id) { mutableStateOf(true) }
+  var initialJumpDone by rememberSaveable(session.id) { mutableStateOf(false) }
+  var previousTurnCount by rememberSaveable(session.id) { mutableStateOf(0) }
   val contentVersion = turns.lastOrNull()?.let { it.id to it.hashCode() }
   val rowKeys = remember(session.id, turns) { chatTurnRowKeys(session.id, turns) }
 
@@ -102,19 +122,31 @@ fun ChatScreen(
       .distinctUntilChanged()
       .collect { pinnedToBottom = it }
   }
-  LaunchedEffect(turns.size, contentVersion) {
-    if (pinnedToBottom && turns.isNotEmpty()) listState.scrollToItem(turns.lastIndex)
+  LaunchedEffect(session.id, historyLoading, turns.size, contentVersion) {
+    if (historyLoading || turns.isEmpty()) return@LaunchedEffect
+    val bottomIndex = turns.size + 1
+    if (!initialJumpDone) {
+      listState.scrollToItem(bottomIndex)
+      initialJumpDone = true
+    } else if (pinnedToBottom) {
+      if (turns.size > previousTurnCount) listState.animateScrollToItem(bottomIndex)
+      else listState.scrollToItem(bottomIndex)
+    }
+    previousTurnCount = turns.size
   }
 
   Scaffold(
     modifier = modifier,
+    containerColor = MaterialTheme.colorScheme.background,
     topBar = {
       TopAppBar(
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
         title = {
           Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             AgentAvatar(agent.displayName, agent.avatarUrl, size = 34.dp)
             Column {
-              Text(agent.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+              Text(session.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1)
+              Text("$serverName · ${agent.displayName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
               StatusLabel(socketLabel(socketStatus, isGenerating), socketStatus == SocketStatus.Connected)
             }
           }
@@ -128,28 +160,37 @@ fun ChatScreen(
       ChatComposer(
         isGenerating = isGenerating,
         connected = socketStatus == SocketStatus.Connected,
+        text = draft,
+        onTextChange = onDraftChange,
         onSend = onSend,
         onStop = onStop,
       )
     },
   ) { padding ->
     Column(Modifier.fillMaxSize().padding(padding)) {
-      if (errorMessage != null) InlineError(errorMessage)
-      if (turns.isEmpty()) {
+      if (errorMessage != null) InlineError(errorMessage, onRetry = onRetry)
+      else if (socketStatus in setOf(SocketStatus.Disconnected, SocketStatus.Forbidden, SocketStatus.Expired) && !historyLoading) {
+        InlineError("连接已中断，消息仍保留。", onRetry = onRetry)
+      }
+      if (historyLoading && turns.isEmpty()) {
+        CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(32.dp))
+      } else if (turns.isEmpty() && errorMessage == null && socketStatus !in setOf(SocketStatus.Disconnected, SocketStatus.Forbidden, SocketStatus.Expired)) {
         EmptyState(
           title = session.title,
           message = "发送消息，开始与 ${agent.displayName} 协作。",
           modifier = Modifier.fillMaxSize(),
         )
-      } else {
+      } else if (turns.isNotEmpty()) {
         LazyColumn(
           state = listState,
-          modifier = Modifier.fillMaxSize(),
+          modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
           verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
           item(key = "top-space") { Spacer(Modifier.height(4.dp)) }
           itemsIndexed(turns, key = { index, _ -> rowKeys[index] }) { _, turn ->
-            ChatTurnView(turn, agent, Modifier.padding(horizontal = 18.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              ChatTurnView(turn, agent, Modifier.widthIn(max = 800.dp).fillMaxWidth().padding(horizontal = 18.dp))
+            }
           }
           item(key = "bottom-space") { Spacer(Modifier.height(8.dp)) }
         }
@@ -239,9 +280,13 @@ private fun AssistantBlocks(blocks: List<ChatBlock>) {
 private fun ReasoningDisclosure(reasoning: ChatBlock.Reasoning) {
   var expanded by rememberSaveable(reasoning.id) { mutableStateOf(false) }
   val durationMs = reasoning.durationMs
+  val motion = ThyraThemeTokens.motion
   Column {
     Row(
-      modifier = Modifier.clickable { expanded = !expanded }.padding(vertical = 4.dp),
+      modifier = Modifier
+        .semantics { stateDescription = if (expanded) "已展开" else "已收起" }
+        .clickable(role = Role.Button, onClickLabel = if (expanded) "收起思考过程" else "展开思考过程") { expanded = !expanded }
+        .heightIn(min = 48.dp),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -257,7 +302,7 @@ private fun ReasoningDisclosure(reasoning: ChatBlock.Reasoning) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
     }
-    AnimatedVisibility(expanded) {
+    AnimatedVisibility(expanded, enter = fadeIn(tween(motion.disclosureMs)), exit = fadeOut(tween(motion.disclosureMs))) {
       SelectionContainer {
         Text(
           reasoning.content,
@@ -275,12 +320,15 @@ private fun ActivityDisclosure(tools: List<ChatBlock.Tool>) {
   var expanded by rememberSaveable(tools.firstOrNull()?.id) { mutableStateOf(false) }
   val running = tools.any(ChatBlock.Tool::running)
   val failed = tools.any(ChatBlock.Tool::failed)
-  Column {
+  val motion = ThyraThemeTokens.motion
+  GlassSurface(Modifier.fillMaxWidth()) {
+  Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
-        .clickable { expanded = !expanded }
-        .padding(vertical = 7.dp),
+        .semantics { stateDescription = if (expanded) "已展开" else "已收起" }
+        .clickable(role = Role.Button, onClickLabel = if (expanded) "收起工具活动" else "展开工具活动") { expanded = !expanded }
+        .heightIn(min = 48.dp),
       horizontalArrangement = Arrangement.spacedBy(9.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -299,10 +347,10 @@ private fun ActivityDisclosure(tools: List<ChatBlock.Tool>) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
-      Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, "展开活动", Modifier.size(18.dp))
+      Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
     }
-    AnimatedVisibility(expanded) {
-      Column(Modifier.padding(start = 27.dp)) {
+    AnimatedVisibility(expanded, enter = fadeIn(tween(motion.disclosureMs)), exit = fadeOut(tween(motion.disclosureMs))) {
+      Column(Modifier.padding(start = 27.dp, bottom = 8.dp)) {
         tools.forEachIndexed { index, tool ->
           val input = tool.input
           val output = tool.output
@@ -314,13 +362,22 @@ private fun ActivityDisclosure(tools: List<ChatBlock.Tool>) {
       }
     }
   }
+  }
 }
 
 @Composable
 private fun DetailText(label: String, value: String) {
+  var showAll by rememberSaveable(label, value) { mutableStateOf(false) }
+  val clipboard = LocalClipboardManager.current
   Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
   SelectionContainer {
-    Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 12)
+    Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = if (showAll) Int.MAX_VALUE else 12)
+  }
+  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (!showAll && (value.lines().size > 12 || value.length > 600)) {
+      Button(onClick = { showAll = true }) { Text("查看全部") }
+    }
+    Button(onClick = { clipboard.setText(AnnotatedString(value)) }) { Text("复制$label") }
   }
 }
 
@@ -358,18 +415,19 @@ private fun MarkdownText(markdown: String) {
 private fun ChatComposer(
   isGenerating: Boolean,
   connected: Boolean,
+  text: String,
+  onTextChange: (String) -> Unit,
   onSend: (String) -> Unit,
   onStop: () -> Unit,
 ) {
-  var text by rememberSaveable { mutableStateOf("") }
   fun submit() {
     val value = text.trim()
     if (value.isNotEmpty() && connected && !isGenerating) {
-      text = ""
+      onTextChange("")
       onSend(value)
     }
   }
-  Surface(tonalElevation = 0.dp, shadowElevation = 0.dp) {
+  Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f), shadowElevation = 2.dp) {
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -381,9 +439,9 @@ private fun ChatComposer(
     ) {
       OutlinedTextField(
         value = text,
-        onValueChange = { text = it },
+        onValueChange = onTextChange,
         modifier = Modifier.weight(1f),
-        placeholder = { Text(if (connected) "输入消息…" else "正在重连…") },
+        placeholder = { Text(if (connected) "输入消息…" else "连接恢复后可发送") },
         minLines = 1,
         maxLines = 7,
         enabled = !isGenerating,

@@ -1,6 +1,6 @@
 package dev.thyra.core.designsystem
 
-import android.content.res.Configuration
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,15 +12,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material3.Button
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -31,42 +32,48 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 
 private val ThyraLightColors = lightColorScheme(
-  primary = Color(0xFF27605C),
+  primary = Color(0xFF456D5A),
   onPrimary = Color.White,
-  primaryContainer = Color(0xFFCCE8E4),
-  onPrimaryContainer = Color(0xFF0D3B38),
-  secondary = Color(0xFF53635F),
-  background = Color(0xFFF9FAF8),
-  surface = Color(0xFFF9FAF8),
-  surfaceVariant = Color(0xFFEEF1EF),
-  outline = Color(0xFF737A77),
-  outlineVariant = Color(0xFFD8DDDA),
-  error = Color(0xFFB3261E),
+  primaryContainer = Color(0xFFDDEBDF),
+  onPrimaryContainer = Color(0xFF202B23),
+  secondary = Color(0xFF526157),
+  onSecondary = Color.White,
+  secondaryContainer = Color(0xFFE5EDE4),
+  onSecondaryContainer = Color(0xFF202B23),
+  background = Color(0xFFE8EFE8),
+  onBackground = Color(0xFF202B23),
+  surface = Color(0xFFFBFCF9),
+  onSurface = Color(0xFF202B23),
+  surfaceVariant = Color(0xFFE5EDE4),
+  onSurfaceVariant = Color(0xFF526157),
+  outline = Color(0xFF75877A),
+  outlineVariant = Color(0xFFD1DBD1),
+  error = Color(0xFFA35651),
+  onError = Color.White,
+  errorContainer = Color(0xFFF7E7E3),
+  onErrorContainer = Color(0xFF633B37),
 )
 
-private val ThyraDarkColors = darkColorScheme(
-  primary = Color(0xFF93D2CC),
-  onPrimary = Color(0xFF003734),
-  primaryContainer = Color(0xFF174E4A),
-  onPrimaryContainer = Color(0xFFB0EFEB),
-  secondary = Color(0xFFBACAC5),
-  background = Color(0xFF101413),
-  surface = Color(0xFF101413),
-  surfaceVariant = Color(0xFF1D2422),
-  outline = Color(0xFF89918E),
-  outlineVariant = Color(0xFF39413F),
-  error = Color(0xFFFFB4AB),
+private val ThyraTypography = Typography(
+  headlineMedium = androidx.compose.ui.text.TextStyle(fontSize = 28.sp, lineHeight = 36.sp, fontWeight = FontWeight.SemiBold),
+  titleLarge = androidx.compose.ui.text.TextStyle(fontSize = 22.sp, lineHeight = 29.sp, fontWeight = FontWeight.SemiBold),
+  titleMedium = androidx.compose.ui.text.TextStyle(fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold),
+  bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 25.sp),
+  bodyMedium = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 22.sp),
+  bodySmall = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, lineHeight = 18.sp),
+  labelLarge = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium),
+  labelMedium = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+  labelSmall = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, lineHeight = 16.sp),
 )
 
 @Immutable
@@ -81,18 +88,36 @@ data class ThyraSpacing(
 )
 
 private val LocalThyraSpacing = staticCompositionLocalOf { ThyraSpacing() }
+@Immutable
+data class ThyraMotion(val feedbackMs: Int = 120, val disclosureMs: Int = 200, val navigationMs: Int = 240)
+
+private val LocalThyraMotion = staticCompositionLocalOf { ThyraMotion() }
 
 object ThyraThemeTokens {
   val spacing: ThyraSpacing
     @Composable @ReadOnlyComposable get() = LocalThyraSpacing.current
+  val motion: ThyraMotion
+    @Composable @ReadOnlyComposable get() = LocalThyraMotion.current
 }
 
 @Composable
 fun ThyraTheme(content: @Composable () -> Unit) {
-  val isDark = (LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
   MaterialTheme(
-    colorScheme = if (isDark) ThyraDarkColors else ThyraLightColors,
-    typography = MaterialTheme.typography,
+    colorScheme = ThyraLightColors,
+    typography = ThyraTypography,
+    content = content,
+  )
+}
+
+/** Static tinted glass; the translucent layer remains readable on API 26. */
+@Composable
+fun GlassSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+  Surface(
+    modifier = modifier,
+    shape = RoundedCornerShape(20.dp),
+    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.72f)),
+    shadowElevation = 2.dp,
     content = content,
   )
 }

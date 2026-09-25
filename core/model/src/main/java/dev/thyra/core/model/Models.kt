@@ -111,6 +111,7 @@ data class ThyraUiState(
   val sessions: List<ChatSession> = emptyList(),
   val selectedSession: ChatSession? = null,
   val history: List<ChatTurn> = emptyList(),
+  val historyLoading: Boolean = false,
   val live: LiveChatState = LiveChatState(),
   val socketStatus: SocketStatus = SocketStatus.Disconnected,
   val busy: Boolean = false,
